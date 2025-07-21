@@ -12,6 +12,8 @@ fn main() {
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
     // core_affinity::set_for_current(0);
     let config = NetworkConfig::read_from_file();
+    #[cfg(feature = "phos")]
+    assert_eq!(config.comm_type, "shm", "PhOS only supports SHM communication");
     match config.comm_type.as_str() {
         "shm" => {
             log::info!("Using shared memory channel")
@@ -64,6 +66,7 @@ fn daemon(config: &NetworkConfig) -> (io::PipeReader, io::PipeWriter) {
             }
         };
         daemon_tx.write_all(&id.to_ne_bytes()).unwrap();
+        daemon_tx.write_all(&client_pid.to_ne_bytes()).unwrap();
         daemon_rx.read_exact(&mut buf).unwrap();
         assert_eq!(id.to_ne_bytes(), buf);
         stream.write_all(&id.to_be_bytes()).unwrap();
@@ -78,6 +81,8 @@ fn server_process(config: NetworkConfig, mut rx: io::PipeReader, mut tx: io::Pip
         let mut buf = [0u8; 4];
         rx.read_exact(&mut buf).unwrap();
         let id = i32::from_ne_bytes(buf);
+        rx.read_exact(&mut buf).unwrap();
+        let client_pid = u32::from_ne_bytes(buf);
         let child_config = Arc::clone(&config);
         let (barrier, child_barrier) = match config.comm_type.as_str() {
             "shm" | "tcp" => {
@@ -90,10 +95,10 @@ fn server_process(config: NetworkConfig, mut rx: io::PipeReader, mut tx: io::Pip
             _ => panic!("Unsupported communication type in config"),
         };
         thread::spawn(move || {
-            launch_server(&child_config, id, child_barrier, is_main_thread);
+            launch_server(&child_config, id, client_pid, child_barrier, is_main_thread);
         });
         barrier.map(|barrier| barrier.wait());
-        tx.write_all(&buf).unwrap();
+        tx.write_all(&id.to_ne_bytes()).unwrap();
         is_main_thread = false;
     }
 }

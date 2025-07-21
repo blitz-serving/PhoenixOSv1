@@ -1,13 +1,6 @@
 use std::{env, fs, path::PathBuf};
 
 fn main() {
-    #[cfg(feature = "phos")]
-    {
-        let libpos_path =
-            env::var("LIBPOS_PATH").expect("Cannot get libpos path. Please set LIBPOS_PATH");
-        println!("cargo:rustc-link-search=native={libpos_path}");
-    }
-
     create_cuda_symlinks();
 
     #[cfg(not(feature = "passthrough"))]

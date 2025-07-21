@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::any::Any;
 use std::error::Error;
 use std::boxed::Box;
 use std::fmt;
@@ -105,6 +106,7 @@ pub enum CommChannelError {
     NoLeftSpace,
     BlockOperation,
     // Add other relevant errors
+    ShmChannelLocked,
 }
 
 impl fmt::Display for CommChannelError {
@@ -179,10 +181,24 @@ impl Channel {
     fn get_inner(&self) -> &Box<dyn CommChannelInner> {
         &self.inner
     }
+
+    pub fn flag_ptr(&self) -> Option<*mut u64> {
+        let inner: &dyn Any = self.inner.as_ref();
+        inner.downcast_ref::<crate::ringbufferchannel::SHMChannel>().map(|shm| {
+            let ptr = crate::ringbufferchannel::BufferManager::get_ptr(shm);
+            ptr.wrapping_add(crate::ringbufferchannel::FLAG_OFF).cast()
+        })
+    }
+
+    pub fn flag(&self) -> Option<&std::sync::atomic::AtomicU64> {
+        self.flag_ptr().map(|ptr| {
+            unsafe { std::sync::atomic::AtomicU64::from_ptr(ptr) }
+        })
+    }
 }
 
 /// communication interface
-pub trait CommChannelInner: CommChannelInnerIO + Send {
+pub trait CommChannelInner: CommChannelInnerIO + Send + Any {
     fn flush_out(&self) -> Result<(), CommChannelError>;
 
     fn recv_ts(&self) -> Result<(), CommChannelError> {

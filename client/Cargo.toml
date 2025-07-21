@@ -19,6 +19,8 @@ lz4_flex = { version = "0.11", default-features = false }
 elf = "0.7"
 libc = { workspace = true }
 signal-hook-registry = "1.4"
+serde = { workspace = true, optional = true }
+serde_yaml = { version = "0.9", optional = true }
 
 [build-dependencies]
 cudasys = { workspace = true }
@@ -32,7 +34,7 @@ crate-type = ["cdylib"]
 # default = ["rdma"]
 rdma = ["network/rdma"]
 passthrough = ["dep:syn"]
-phos = []
+phos = ["dep:serde", "dep:serde_yaml"]
 
 [lints]
 workspace = true

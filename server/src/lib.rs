@@ -80,23 +80,17 @@ fn create_buffer(
 
 fn receive_request<T: CommChannel>(channel_receiver: &mut T) -> Result<i32, CommChannelError> {
     let mut proc_id = 0;
-    if let Ok(()) = proc_id.recv(channel_receiver) {
-        Ok(proc_id)
-    } else {
-        Err(CommChannelError::IoError)
-    }
+    let () = proc_id.recv(channel_receiver)?;
+    Ok(proc_id)
 }
 
 pub fn launch_server(
     config: &NetworkConfig,
     id: i32,
+    client_pid: u32,
     barrier: Option<std::sync::Arc<std::sync::Barrier>>,
     is_main_thread: bool,
 ) {
-    // PhOS workspace must be created before client initialization barrier
-    #[cfg(feature = "phos")]
-    let pos_cuda_ws = phos::POSWorkspace_CUDA::new();
-
     let (channel_sender, channel_receiver) = create_buffer(config, id, barrier);
     info!(
         "[{}:{}] {} buffer created",
@@ -132,33 +126,44 @@ pub fn launch_server(
         opt_async_api: config.opt_async_api,
         opt_shadow_desc: config.opt_shadow_desc,
         #[cfg(feature = "phos")]
-        pos_cuda_ws,
+        pos_cuda_ws: phos::POSWorkspace_CUDA::new(),
+    };
+
+    #[cfg(feature = "phos")]
+    let phos_uuid = {
+        let job_name = phos::recv_job_name(&server.channel_receiver);
+        // TODO: use RAII to destroy the client somewhere
+        let uuid = server.pos_cuda_ws.create_client(&job_name, client_pid as i32);
+        assert_eq!(0, uuid);
+        server.pos_cuda_ws.set_flag_ptr(uuid, server.channel_receiver.flag_ptr().unwrap());
+        uuid
     };
 
     loop {
-        if let Ok(proc_id) = receive_request(&mut server.channel_receiver) {
-            if proc_id == -1 {
+        match receive_request(&mut server.channel_receiver) {
+            Ok(-1) => {
                 break;
             }
+            Ok(proc_id) => dispatch(proc_id, &mut server),
             #[cfg(feature = "phos")]
-            if proc_id == -2 {
-                let mut uuid = 0u64;
-                uuid.recv(&mut server.channel_receiver).unwrap();
-                server.pos_cuda_ws.stop(uuid);
-                continue;
+            Err(CommChannelError::ShmChannelLocked) => {
+                assert!(matches!(
+                    receive_request(&mut server.channel_receiver),
+                    Err(CommChannelError::ShmChannelLocked),
+                ));
+                server.pos_cuda_ws.stop_and_block(phos_uuid);
+                // TODO: PhOS currently doesn't preserve flag address across restore.
+                phos::clear_flag(&server.channel_receiver);
+                server.pos_cuda_ws.set_flag_ptr(phos_uuid, server.channel_receiver.flag_ptr().unwrap());
             }
-            dispatch(proc_id, &mut server);
-        } else {
-            error!(
-                "[{}:{}] failed to receive request",
-                std::file!(),
-                std::line!()
-            );
-            break;
+            Err(e) => {
+                error!("failed to receive request: {e:?}");
+                break;
+            }
         }
     }
 
-    info!("[{}:{}] server #{} terminated", std::file!(), std::line!(), server.id);
+    info!("[{}:{}] server #{} (client PID: {}) terminated", std::file!(), std::line!(), server.id, client_pid);
 
     if is_main_thread {
         std::process::exit(0);

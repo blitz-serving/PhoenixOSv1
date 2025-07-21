@@ -1,50 +1,34 @@
-use std::ffi::c_void;
+use std::fs;
 
-use network::{Channel, CommChannel, Transportable};
+use network::type_impl::send_slice;
+use network::Channel;
+use serde::Deserialize;
 
-#[link(name = "pos")]
-extern "C" {
-    fn pos_create_agent() -> *mut c_void;
-    fn pos_destory_agent(pos_agent: *mut c_void) -> i32;
-    fn pos_agent_get_uuid(pos_agent: *mut c_void) -> u64;
-    fn pos_query_agent_ready_state(pos_agent: *mut c_void) -> i32;
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Config {
+    job_name: String,
+    #[serde(default)]
+    log_path: String,
+    #[serde(default)]
+    daemon_addr: String,
 }
 
-pub struct POSAgent(*mut c_void);
-
-impl POSAgent {
-    pub fn new() -> Self {
-        let pos_agent = unsafe { pos_create_agent() };
-        assert!(!pos_agent.is_null());
-        Self(pos_agent)
+pub fn read_job_name() -> String {
+    let file = fs::read_to_string("./pos.yaml").expect("failed to read ./pos.yaml");
+    let Config { job_name, log_path, daemon_addr } =
+        serde_yaml::from_str(&file).expect("failed to parse ./pos.yaml");
+    match job_name.len() {
+        1..=256 => {} // see kMaxJobNameLen in PhOS
+        _ => panic!("job_name is empty or too long"),
     }
-
-    fn get_uuid(&self) -> u64 {
-        unsafe { pos_agent_get_uuid(self.0) }
+    if !log_path.is_empty() || !daemon_addr.is_empty() {
+        log::warn!("remoting client ignores log_path and daemon_addr in ./pos.yaml");
     }
+    log::info!("job_name: {job_name}");
+    job_name
+}
 
-    fn is_ready(&self) -> bool {
-        0 != unsafe { pos_query_agent_ready_state(self.0) }
-    }
-
-    pub fn block_until_ready(&self, sender: &mut Channel) {
-        if self.is_ready() {
-            return;
-        }
-
-        log::info!("Sending checkpoint signal...");
-        (-2).send(sender).unwrap();
-        self.get_uuid().send(sender).unwrap();
-        sender.flush_out().unwrap();
-
-        log::info!("Blocking until ready...");
-        while !self.is_ready() {
-            std::thread::yield_now();
-        }
-    }
-
-    pub fn drop(&mut self) {
-        unsafe { pos_destory_agent(self.0) };
-        self.0 = std::ptr::null_mut();
-    }
+pub fn send_job_name(job_name: &str, channel_sender: &Channel) {
+    send_slice(job_name.as_bytes(), channel_sender).unwrap()
 }

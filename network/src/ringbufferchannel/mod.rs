@@ -29,7 +29,12 @@ pub const CACHE_LINE_SZ: usize = 64;
 
 pub const HEAD_OFF: usize = 0;
 pub const TAIL_OFF: usize = CACHE_LINE_SZ;
-pub const META_AREA: usize = CACHE_LINE_SZ * 2;
+pub const FLAG_OFF: usize = CACHE_LINE_SZ * 2;
+pub const META_AREA: usize = CACHE_LINE_SZ * 3;
+
+pub const SHM_FLAG_IDLE: u64 = 0;
+pub const SHM_FLAG_IN_USE: u64 = 1;
+pub const SHM_FLAG_WRITE_DISABLED: u64 = 2;
 
 /// A buffer can use arbitrary memory for its channel
 ///
@@ -67,6 +72,12 @@ pub trait RingBufferManager: BufferManager {
     #[inline]
     fn write_tail_volatile(&self, tail: usize) {
         unsafe { ptr::write_volatile(self.get_ptr().add(TAIL_OFF) as *mut usize, tail) }
+    }
+
+    /// See [crate::Channel::flag_ptr] for writing operations.
+    #[inline]
+    fn read_flag_volatile(&self) -> u64 {
+        unsafe { ptr::read_volatile(self.get_ptr().add(FLAG_OFF).cast()) }
     }
 
     #[inline]
@@ -174,7 +185,11 @@ impl<T: RingBufferChannel + CommChannelInner> CommChannelInnerIO for T {
         let mut cur_recv = 0;
         while cur_recv != dst.len {
             let mut new_dst = dst.add_offset(cur_recv);
-            let recv = self.try_get_bytes(&mut new_dst)?;
+            let Ok(recv) = self.try_get_bytes(&mut new_dst) else { panic!() };
+            if recv == 0 && self.read_flag_volatile() == SHM_FLAG_WRITE_DISABLED & !SHM_FLAG_IN_USE {
+                assert_eq!(cur_recv, 0);
+                return Err(CommChannelError::ShmChannelLocked);
+            }
             cur_recv += recv;
         }
         Ok(cur_recv)

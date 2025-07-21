@@ -39,8 +39,6 @@ struct ClientThread {
     cuda_device: Option<std::ffi::c_int>,
     cuda_device_init: bool,
     cuda_pctx_flags: Option<std::ffi::c_uint>,
-    #[cfg(feature = "phos")]
-    phos_agent: phos::POSAgent,
     opt_async_api: bool,
     opt_shadow_desc: bool,
     opt_local: bool,
@@ -61,6 +59,11 @@ impl ClientThread {
             }
         }
         let config = network::NetworkConfig::read_from_file();
+        #[cfg(feature = "phos")]
+        let phos_job_name = {
+            assert_eq!(config.comm_type, "shm", "PhOS only supports SHM communication");
+            phos::read_job_name()
+        };
         let id = {
             let mut stream = std::net::TcpStream::connect(&config.daemon_socket).unwrap();
             stream.write_all(&std::process::id().to_be_bytes()).unwrap();
@@ -108,6 +111,9 @@ impl ClientThread {
             signal_hook_registry::register_sigaction(libc::SIGTERM, atsignal).unwrap();
         }
 
+        #[cfg(feature = "phos")]
+        phos::send_job_name(&phos_job_name, &channel_sender);
+
         Self {
             id,
             channel_sender,
@@ -119,17 +125,12 @@ impl ClientThread {
             opt_async_api: config.opt_async_api,
             opt_shadow_desc: config.opt_shadow_desc,
             opt_local: config.opt_local,
-            #[cfg(feature = "phos")]
-            phos_agent: phos::POSAgent::new(),
         }
     }
 }
 
 impl Drop for ClientThread {
     fn drop(&mut self) {
-        #[cfg(feature = "phos")]
-        self.phos_agent.drop();
-
         let proc_id = -1;
         proc_id.send(&self.channel_sender).unwrap();
         self.channel_sender.flush_out().unwrap();
