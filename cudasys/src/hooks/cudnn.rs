@@ -366,10 +366,10 @@ fn cudnnBackendCreateDescriptor(
     descriptor: *mut cudnnBackendDescriptor_t,
 ) -> cudnnStatus_t;
 
-#[cuda_hook(proc_id = 2501)]
+#[cuda_hook(proc_id = 2501, async_api)]
 fn cudnnBackendDestroyDescriptor(descriptor: cudnnBackendDescriptor_t) -> cudnnStatus_t;
 
-#[cuda_hook(proc_id = 2502)]
+#[cuda_hook(proc_id = 2502, async_api)]
 fn cudnnBackendExecute(
     handle: cudnnHandle_t,
     executionPlan: cudnnBackendDescriptor_t,
@@ -428,7 +428,7 @@ fn cudnnBackendGetAttributeDescriptors(
     arrayOfElements: *mut c_void,
 ) -> cudnnStatus_t;
 
-#[cuda_hook(proc_id = 2506)]
+#[cuda_hook(proc_id = 2506, async_api)]
 fn cudnnBackendSetAttribute(
     descriptor: cudnnBackendDescriptor_t,
     attributeName: cudnnBackendAttributeName_t,

@@ -38,6 +38,7 @@ struct ClientThread {
     resource_idx: usize,
     cuda_device: Option<std::ffi::c_int>,
     cuda_device_init: bool,
+    cuda_pctx_flags: Option<std::ffi::c_uint>,
     #[cfg(feature = "phos")]
     phos_agent: phos::POSAgent,
     opt_async_api: bool,
@@ -114,6 +115,7 @@ impl ClientThread {
             resource_idx: 0,
             cuda_device: None,
             cuda_device_init: false,
+            cuda_pctx_flags: None,
             opt_async_api: config.opt_async_api,
             opt_shadow_desc: config.opt_shadow_desc,
             opt_local: config.opt_local,

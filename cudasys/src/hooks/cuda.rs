@@ -3,7 +3,22 @@ use codegen::{cuda_custom_hook, cuda_hook};
 use std::os::raw::*;
 
 #[cuda_hook(proc_id = 670)]
-fn cuDevicePrimaryCtxGetState(dev: CUdevice, flags: *mut c_uint, active: *mut c_int) -> CUresult;
+fn cuDevicePrimaryCtxGetState(dev: CUdevice, flags: *mut c_uint, active: *mut c_int) -> CUresult {
+    'client_before_send: {
+        if let (true, Some(cuda_pctx_flags)) = (client.opt_local, client.cuda_pctx_flags) {
+            unsafe {
+                *flags = cuda_pctx_flags;
+                *active = 1;
+            }
+            return Default::default();
+        }
+    }
+    'client_after_recv: {
+        if *active == 1 {
+            client.cuda_pctx_flags = Some(*flags);
+        }
+    }
+}
 
 #[cuda_hook(proc_id = 918, async_api)]
 fn cuLaunchKernel(

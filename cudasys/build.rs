@@ -233,7 +233,7 @@ fn main() {
 
     bind_gen(
         &cuda_paths,
-        "cudnn.h",
+        "cudnn_wrapper.h",
         "cudnn",
         &["^cudnn.*", "^CUDNN.*"],
         &["^CUDNN.*", "^cudnn.*"],
