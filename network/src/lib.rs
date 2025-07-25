@@ -31,6 +31,17 @@ pub struct NetworkConfig {
 
 impl NetworkConfig {
     pub fn read_from_file() -> Self {
+        if log::max_level() > log::STATIC_MAX_LEVEL {
+            log::error!(
+                "Max log level ({}) is higher than compiled ({}) \n\
+                Try turning off the 'rdma' feature if log is required \n\
+                See: https://doc.rust-lang.org/cargo/reference/features.html#feature-unification \n\
+                https://github.com/SJTU-IPADS/krcore-artifacts/blob/develop/rdma-shim/Cargo.toml#L12",
+                log::max_level(),
+                log::STATIC_MAX_LEVEL,
+            );
+        }
+
         // Use environment variable to set config file's path.
         let path = match std::env::var("NETWORK_CONFIG") {
             Ok(val) => val,
