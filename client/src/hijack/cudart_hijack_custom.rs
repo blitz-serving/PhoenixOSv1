@@ -92,8 +92,7 @@ fn get_cufunction(func: HostPtr) -> cudasys::cuda::CUfunction {
     }
 
     let load_module = |fatCubinHandle: &FatBinaryHandle| {
-        // See our implementation of `__cudaRegisterFatBinary`
-        let index = (*fatCubinHandle >> 4) - 1;
+        let index = fatCubinHandle.to_index();
         log::debug!("registering fatbin #{index}");
         let image = runtime.lazy_fatbins[index];
         let mut module = std::ptr::null_mut();
@@ -118,7 +117,7 @@ fn get_cufunction(func: HostPtr) -> cudasys::cuda::CUfunction {
 
 #[no_mangle]
 pub extern "C" fn cudaLaunchKernel(
-    func: MemPtr,
+    func: HostPtr,
     gridDim: dim3,
     blockDim: dim3,
     args: *mut *mut ::std::os::raw::c_void,
@@ -227,17 +226,17 @@ pub extern "C" fn __cudaPopCallConfiguration(
 #[no_mangle]
 extern "C" fn cudaFuncGetAttributes(
     attr: *mut cudaFuncAttributes,
-    func: *const c_void,
+    func: HostPtr,
 ) -> cudaError_t {
     log::debug!(target: "cudaFuncGetAttributes", "");
-    let func = get_cufunction(func as HostPtr);
+    let func = get_cufunction(func);
     super::cudart_hijack::cudaFuncGetAttributesInternal(attr, func)
 }
 
 #[no_mangle]
 extern "C" fn cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
     numBlocks: *mut c_int,
-    func: *const c_void,
+    func: HostPtr,
     blockSize: c_int,
     dynamicSMemSize: usize,
     flags: c_uint,
@@ -245,7 +244,7 @@ extern "C" fn cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
     log::debug!(target: "cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags", "");
     let result = super::cuda_hijack::cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
         numBlocks,
-        get_cufunction(func as HostPtr),
+        get_cufunction(func),
         blockSize,
         dynamicSMemSize,
         flags,
@@ -255,7 +254,7 @@ extern "C" fn cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
 
 #[no_mangle]
 extern "C" fn cudaFuncSetAttribute(
-    func: *const c_void,
+    func: HostPtr,
     attr: cudaFuncAttribute,
     value: c_int,
 ) -> cudaError_t {
@@ -263,7 +262,7 @@ extern "C" fn cudaFuncSetAttribute(
     #[expect(clippy::missing_transmute_annotations)]
     unsafe {
         std::mem::transmute(super::cuda_hijack::cuFuncSetAttribute(
-            get_cufunction(func as _),
+            get_cufunction(func),
             std::mem::transmute(attr),
             value,
         ))

@@ -1,5 +1,7 @@
 #![expect(non_snake_case)]
 
+mod client;
+
 mod cuda_hijack;
 mod cuda_hijack_custom;
 mod cuda_hijack_utils;
@@ -22,10 +24,9 @@ mod nvrtc_unimplement;
 mod nccl_hijack;
 mod nccl_unimplement;
 
-#[expect(unused_imports)]
-use codegen::{cuda_hook_hijack, use_thread_local};
+use codegen::cuda_hook_hijack;
 use network::type_impl::{recv_slice_to, send_slice, MemPtr};
 use network::{CommChannel, Transportable};
 
 use crate::elf::{FatBinaryHeader, FatBinaryWrapper};
-use crate::{ClientThread, FatBinaryHandle, HostPtr, CLIENT_THREAD, DRIVER_CACHE, RUNTIME_CACHE};
+use client::{ClientThread, FatBinaryHandle, HostPtr, CLIENT_THREAD, DRIVER_CACHE, RUNTIME_CACHE};

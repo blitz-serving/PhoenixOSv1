@@ -16,7 +16,7 @@ extern "C" fn __cudaRegisterFatBinary(fatCubin: *const FatBinaryWrapper) -> FatB
 
     let mut runtime = RUNTIME_CACHE.write().unwrap();
     runtime.lazy_fatbins.push(fatCubin);
-    runtime.lazy_fatbins.len() << 4
+    FatBinaryHandle::from_index(runtime.lazy_fatbins.len() - 1)
 }
 
 #[no_mangle]
@@ -32,8 +32,8 @@ pub extern "C" fn __cudaRegisterFatBinaryEnd(_fatCubinHandle: MemPtr) {
 
 #[no_mangle]
 pub extern "C" fn __cudaRegisterFunction(
-    fatCubinHandle: MemPtr,
-    hostFun: MemPtr,
+    fatCubinHandle: FatBinaryHandle,
+    hostFun: HostPtr,
     _deviceFun: *mut ::std::os::raw::c_char,
     deviceName: *const ::std::os::raw::c_char,
     _thread_limit: ::std::os::raw::c_int,
@@ -59,8 +59,8 @@ pub extern "C" fn __cudaRegisterFunction(
 
 #[no_mangle]
 pub extern "C" fn __cudaRegisterVar(
-    fatCubinHandle: MemPtr,
-    hostVar: MemPtr,
+    fatCubinHandle: FatBinaryHandle,
+    hostVar: HostPtr,
     _deviceAddress: *mut ::std::os::raw::c_char,
     deviceName: *const ::std::os::raw::c_char,
     _ext: ::std::os::raw::c_int,

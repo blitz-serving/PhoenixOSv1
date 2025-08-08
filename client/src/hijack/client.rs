@@ -1,47 +1,31 @@
-#![cfg_attr(feature = "passthrough", expect(dead_code))]
-#![feature(thread_local)]
-
-#[cfg(feature = "rdma")]
-use network::ringbufferchannel::RDMAChannel;
-
-use network::ringbufferchannel::{EmulatorChannel, SHMChannel};
-use network::{tcp, Channel, CommChannel, Transportable};
-
-#[cfg(not(feature = "passthrough"))]
-mod hijack;
-#[cfg(feature = "passthrough")]
-mod passthrough;
-
-mod elf;
-use elf::{FatBinaryHeader, KernelParamInfo};
-
-mod dl;
-
-#[cfg(feature = "phos")]
-mod phos;
-
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
-use std::ffi::c_char;
+use std::ffi::{c_char, c_int, c_uint, c_void};
 use std::io::{Read as _, Write as _};
+use std::net::TcpStream;
 use std::sync::RwLock;
+use std::{process, thread};
 
 use cudasys::types::cuda::{CUfunction, CUmodule};
-type FatBinaryHandle = usize;
-type HostPtr = usize;
+#[cfg(feature = "rdma")]
+use network::ringbufferchannel::RDMAChannel;
+use network::ringbufferchannel::{EmulatorChannel, SHMChannel};
+use network::{tcp, Channel, CommChannel, Transportable};
 
-struct ClientThread {
-    id: i32,
-    channel_sender: Channel,
-    channel_receiver: Channel,
-    resource_idx: usize,
-    cuda_device: Option<std::ffi::c_int>,
-    cuda_device_init: bool,
-    cuda_pctx_flags: Option<std::ffi::c_uint>,
-    opt_async_api: bool,
-    opt_shadow_desc: bool,
-    opt_local: bool,
+use crate::elf::{FatBinaryHeader, KernelParamInfo};
+
+pub struct ClientThread {
+    pub id: i32,
+    pub channel_sender: Channel,
+    pub channel_receiver: Channel,
+    pub resource_idx: usize,
+    pub cuda_device: Option<c_int>,
+    pub cuda_device_init: bool,
+    pub cuda_pctx_flags: Option<c_uint>,
+    pub opt_async_api: bool,
+    pub opt_shadow_desc: bool,
+    pub opt_local: bool,
 }
 
 impl ClientThread {
@@ -62,16 +46,16 @@ impl ClientThread {
         #[cfg(feature = "phos")]
         let phos_job_name = {
             assert_eq!(config.comm_type, "shm", "PhOS only supports SHM communication");
-            phos::read_job_name()
+            crate::phos::read_job_name()
         };
         let id = {
-            let mut stream = std::net::TcpStream::connect(&config.daemon_socket).unwrap();
-            stream.write_all(&std::process::id().to_be_bytes()).unwrap();
+            let mut stream = TcpStream::connect(&config.daemon_socket).unwrap();
+            stream.write_all(&process::id().to_be_bytes()).unwrap();
             let mut buf = [0u8; 4];
             stream.read_exact(&mut buf).unwrap();
             i32::from_be_bytes(buf)
         };
-        log::info!("[#{id}] PID = {}, {:?}", std::process::id(), std::thread::current().id());
+        log::info!("[#{id}] PID = {}, {:?}", process::id(), thread::current().id());
         let (channel_sender, channel_receiver) = match config.comm_type.as_str() {
             "shm" => {
                 let (sender, receiver) = SHMChannel::new_client_with_id(&config, id).unwrap();
@@ -105,14 +89,14 @@ impl ClientThread {
 
             // HACK: should just send something to the daemon socket
             fn atsignal(_info: &libc::siginfo_t) {
-                std::process::exit(0);
+                process::exit(0);
             }
             signal_hook_registry::register_sigaction(libc::SIGQUIT, atsignal).unwrap();
             signal_hook_registry::register_sigaction(libc::SIGTERM, atsignal).unwrap();
         }
 
         #[cfg(feature = "phos")]
-        phos::send_job_name(&phos_job_name, &channel_sender);
+        crate::phos::send_job_name(&phos_job_name, &channel_sender);
 
         Self {
             id,
@@ -138,18 +122,18 @@ impl Drop for ClientThread {
 }
 
 thread_local! {
-    static CLIENT_THREAD: RefCell<ClientThread> = RefCell::new(ClientThread::new());
+    pub static CLIENT_THREAD: RefCell<ClientThread> = RefCell::new(ClientThread::new());
     static CLIENT_THREAD_INIT: Cell<bool> = const { Cell::new(false) };
 }
 
-static DRIVER_CACHE: RwLock<DriverCache> = RwLock::new(DriverCache::new());
-static RUNTIME_CACHE: RwLock<RuntimeCache> = RwLock::new(RuntimeCache::new());
+pub static DRIVER_CACHE: RwLock<DriverCache> = RwLock::new(DriverCache::new());
+pub static RUNTIME_CACHE: RwLock<RuntimeCache> = RwLock::new(RuntimeCache::new());
 
-struct DriverCache {
+pub struct DriverCache {
     /// Used in `cuModuleGetFunction`, populated by `cuModuleLoadData`.
-    images: BTreeMap<CUmodule, Cow<'static, [u8]>>,
+    pub images: BTreeMap<CUmodule, Cow<'static, [u8]>>,
     /// Used in `cuLaunchKernel`, populated by `cuModuleGetFunction`.
-    function_params: BTreeMap<CUfunction, Box<[KernelParamInfo]>>,
+    pub function_params: BTreeMap<CUfunction, Box<[KernelParamInfo]>>,
 }
 
 // The pointers are server-side.
@@ -165,18 +149,18 @@ impl DriverCache {
     }
 }
 
-struct RuntimeCache {
-    cuda_device: Option<std::ffi::c_int>,
+pub struct RuntimeCache {
+    pub cuda_device: Option<c_int>,
     /// Populated by `__cudaRegisterFatBinary`.
-    lazy_fatbins: Vec<*const FatBinaryHeader>,
+    pub lazy_fatbins: Vec<*const FatBinaryHeader>,
     /// Populated by `__cudaRegisterFunction`.
-    lazy_functions: BTreeMap<HostPtr, (FatBinaryHandle, *const c_char)>,
+    pub lazy_functions: BTreeMap<HostPtr, (FatBinaryHandle, *const c_char)>,
     /// Populated by `__cudaRegisterVar`.
-    lazy_variables: BTreeMap<HostPtr, (FatBinaryHandle, *const c_char)>,
+    pub lazy_variables: BTreeMap<HostPtr, (FatBinaryHandle, *const c_char)>,
     /// Result of `cuModuleLoadData` calls.
-    loaded_modules: BTreeMap<FatBinaryHandle, CUmodule>,
+    pub loaded_modules: BTreeMap<FatBinaryHandle, CUmodule>,
     /// Used in `cudaLaunchKernel`. Cache of `cuModuleGetFunction` calls.
-    loaded_functions: BTreeMap<HostPtr, CUfunction>,
+    pub loaded_functions: BTreeMap<HostPtr, CUfunction>,
 }
 
 // The pointers are either static or server-side.
@@ -196,8 +180,20 @@ impl RuntimeCache {
     }
 }
 
-#[small_ctor::ctor]
-unsafe fn init() {
-//     core_affinity::set_for_current(1);
-    env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct FatBinaryHandle(usize);
+
+impl FatBinaryHandle {
+    pub fn from_index(index: usize) -> Self {
+        Self((index + 1) << 4)
+    }
+
+    pub fn to_index(&self) -> usize {
+        (self.0 >> 4) - 1
+    }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct HostPtr(*const c_void);
