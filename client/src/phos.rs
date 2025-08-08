@@ -1,5 +1,7 @@
-use std::fs;
+use std::sync::atomic::Ordering;
+use std::{fs, thread};
 
+use network::ringbufferchannel::{SHM_FLAG_IDLE, SHM_FLAG_IN_USE};
 use network::type_impl::send_slice;
 use network::Channel;
 use serde::Deserialize;
@@ -31,4 +33,18 @@ pub fn read_job_name() -> String {
 
 pub fn send_job_name(job_name: &str, channel_sender: &Channel) {
     send_slice(job_name.as_bytes(), channel_sender).unwrap()
+}
+
+pub fn set_client_flag_blocking(channel_sender: &Channel) {
+    let flag = channel_sender.flag().unwrap();
+    while let Err(_) =
+        flag.compare_exchange(SHM_FLAG_IDLE, SHM_FLAG_IN_USE, Ordering::SeqCst, Ordering::SeqCst)
+    {
+        thread::yield_now();
+    }
+}
+
+pub fn clear_client_flag(channel_sender: &Channel) {
+    let flag = channel_sender.flag().unwrap();
+    flag.fetch_and(!SHM_FLAG_IN_USE, Ordering::SeqCst);
 }

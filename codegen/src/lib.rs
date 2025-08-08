@@ -241,16 +241,10 @@ pub fn cuda_hook_hijack(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     let gen_fn = quote! {
-        // manually expanded the following macro to work around rust-analyzer bug
-        // otherwise `Expand macro recursively at caret` is bugged
-        // #[use_thread_local(client = CLIENT_THREAD.with_borrow_mut)]
         #modifiers fn #func(#(#params),*) -> #result_ty {
-        CLIENT_THREAD.with_borrow_mut(|client| {
+        let main = |client: &mut ClientThread| {
             log::debug!(target: #func_str, "[#{}]", client.id);
             let ClientThread { channel_sender, channel_receiver, .. } = client;
-
-            #[cfg(feature = "phos")]
-            client.phos_agent.block_until_ready(channel_sender);
 
             let proc_id: i32 = #proc_id;
             let mut #result_name: #result_ty = Default::default();
@@ -294,10 +288,13 @@ pub fn cuda_hook_hijack(args: TokenStream, input: TokenStream) -> TokenStream {
             }
             #( #client_after_recv )*
 
-            #[cfg(feature = "phos")]
-            client.phos_agent.block_until_ready(channel_sender);
-
             return #result_name;
+        };
+        CLIENT_THREAD.with_borrow_mut(|client| {
+            client.before_call();
+            let result = main(client);
+            client.after_call();
+            result
         })
         }
     };

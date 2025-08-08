@@ -111,6 +111,16 @@ impl ClientThread {
             opt_local: config.opt_local,
         }
     }
+
+    pub fn before_call(&mut self) {
+        #[cfg(feature = "phos")]
+        crate::phos::set_client_flag_blocking(&self.channel_sender);
+    }
+
+    pub fn after_call(&mut self) {
+        #[cfg(feature = "phos")]
+        crate::phos::clear_client_flag(&self.channel_sender);
+    }
 }
 
 impl Drop for ClientThread {
