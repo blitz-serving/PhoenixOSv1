@@ -79,6 +79,6 @@ find -type f -executable -name "test_*" -exec ./startclient_debug.sh {} \;
 P.S. Can use `RUST_LOG` environment to control the log level (default=debug).
 
 
-### Application test
+### Running applications with XPURemoting
 
 Please refer to [application-guild](./tests/apps/README.md) to run applicatons
