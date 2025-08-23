@@ -187,7 +187,7 @@ fn main() {
     for path in &cuda_libs {
         println!("cargo:rustc-link-search=native={}", path.display());
     }
-
+    
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=CUDA_LIBRARY_PATH");
     eprintln!("CUDA paths: {:?}", cuda_paths);

@@ -141,7 +141,7 @@ pub mod nvrtc {
 
 pub mod nccl {
     include!("bindings/types/nccl.rs");
-
+     
     const _: () = assert!(NCCL_VERSION_CODE >= 21602, "run `apt install libnccl2 libnccl-dev`");
 
     success_return_value!(ncclResult_t::ncclSuccess);
