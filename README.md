@@ -31,9 +31,14 @@ You should specify `default` feature in both `client/server`'s Cargo.toml to dec
 
 ## Config
 
-You can use `config.toml` file to config communication type, buffer size, RDMA server listener socket and so on.
+You can use `config.toml` file to configure communication type, buffer size, RDMA server listener socket and so on.
+An example of how this file is shown in `config.example.toml` in the root of the source code (/path/to/xpuremoting).
+How to customized the configuration file is quite self-explained given its content. 
 
-Since `cargo` will use cwd as running root folder, you should use absolute path for config file. The default path will be `/workspace/config.toml`. If you want a specific path, you can use the environment variable `NETWORK_CONFIG` to customize it. For example: `NETWORK_CONFIG=/workspace/config.toml cargo run server`.
+By default, you need to use the absolute path for the config file, since `cargo` will use cwd as running root folder.
+The default path will be `/workspace/config.toml` (using our provided docker environment).
+If you want a specific path, you can use the environment variable `NETWORK_CONFIG` to customize it.
+For example: `NETWORK_CONFIG=/workspace/config.toml cargo run server`.
 
 ### Emulator
 
