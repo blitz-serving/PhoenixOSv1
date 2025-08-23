@@ -18,10 +18,10 @@ const CLOCK_FREQUENCY: f64 = 2.2;
 const ITER_NUM: usize = 10010;
 
 pub struct Timer {
-    start_time: [[u64; MEASURE_MAX_NUM]; ITER_NUM],
-    stop_time: [[u64; MEASURE_MAX_NUM]; ITER_NUM],
+    start_time: Box<[[u64; MEASURE_MAX_NUM]; ITER_NUM]>,
+    stop_time:  Box<[[u64; MEASURE_MAX_NUM]; ITER_NUM]>,
     cnt: usize,
-    output_file: String,
+    output_file: Option<String>,
 }
 
 #[inline]
@@ -36,13 +36,29 @@ pub fn clock2ns(clock: u64) -> f64 {
 }
 
 impl Timer {
+    
     pub fn new(file_name: String) -> Self {
-        Timer {
-            start_time: [[0; MEASURE_MAX_NUM]; ITER_NUM],
-            stop_time: [[0; MEASURE_MAX_NUM]; ITER_NUM],
-            cnt: 0,
-            output_file: file_name,
-        }
+        let start_time = vec![[0u64; MEASURE_MAX_NUM]; ITER_NUM]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap(); // This converts Box<[T]> to Box<[T; N]>
+        let stop_time = vec![[0u64; MEASURE_MAX_NUM]; ITER_NUM]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
+        Self { start_time, stop_time, cnt: 0, output_file: Some(file_name) }
+    }
+
+    pub fn new_null() -> Self {
+        let start_time = vec![[0u64; MEASURE_MAX_NUM]; ITER_NUM]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap(); // This converts Box<[T]> to Box<[T; N]>
+        let stop_time = vec![[0u64; MEASURE_MAX_NUM]; ITER_NUM]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap();
+        Self { start_time, stop_time, cnt: 0, output_file: None }
     }
 
     #[inline]
@@ -51,8 +67,13 @@ impl Timer {
     }
 
     #[inline]
-    pub fn stop(&mut self, ty: usize) {
-        self.stop_time[self.cnt][ty] = rdtscp();
+    pub fn stop(&mut self, id: usize) {
+        self.stop_time[self.cnt][id] = rdtscp();
+    }
+
+    #[inline]
+    pub fn get_time(&self, cnt: usize, id: usize) -> u64 {
+        self.stop_time[cnt][id] - self.start_time[cnt][id]
     }
 
     #[inline]
@@ -64,13 +85,15 @@ impl Timer {
     }
 
     pub fn write(&self) -> io::Result<()> {
-        let mut file = File::create(self.output_file.clone())?;
-        for i in 0..ITER_NUM {
-            let mut row_result = Vec::new();
-            for j in 0..MEASURE_MAX_NUM {
-                row_result.push(self.start_time[i][j].to_string());
+        if let Some(ref file_name) = self.output_file {
+            let mut file = File::create(file_name)?;
+            for i in 0..ITER_NUM {
+                let mut row_result = Vec::new();
+                for j in 0..MEASURE_MAX_NUM {
+                    row_result.push(self.start_time[i][j].to_string());
+                }
+                writeln!(file, "{}", &row_result.join(", "))?;
             }
-            writeln!(file, "{}", &row_result.join(", "))?;
         }
         Ok(())
     }
@@ -82,14 +105,30 @@ mod tests {
 
     #[test]
     fn clock_test() {
-        let mut timer = Timer::new();
+        let mut timer = Timer::new_null();
 
-        timer.start(MEASURE_TOTAL);
+        timer.set(MEASURE_TOTAL);
         let mut _sum: u64 = 0;
         for i in 0..10000 {
             _sum += i;
         }
         timer.stop(MEASURE_TOTAL);
-        assert!(timer.get_time(MEASURE_TOTAL) > 0.0);
+
+        let t = timer.get_time(0, MEASURE_TOTAL);
+        assert!(t > 0);
+
+        // round 2
+        timer.plus_cnt();
+
+        timer.set(MEASURE_TOTAL);                
+        let mut _sum: u64 = 0;
+        for i in 0..10000 {
+            _sum += i;
+        }
+        timer.stop(MEASURE_TOTAL);        
+        let t2 = timer.get_time(1, MEASURE_TOTAL);        
+        assert!(t2 > 0);
+        let tt = timer.get_time(0, MEASURE_TOTAL);
+        assert_eq!(t,tt);
     }
 }
