@@ -89,7 +89,6 @@ pub fn launch_server(
     id: i32,
     client_pid: u32,
     barrier: Option<std::sync::Arc<std::sync::Barrier>>,
-    is_main_thread: bool,
 ) {
     let (channel_sender, channel_receiver) = create_buffer(config, id, barrier);
     info!(
@@ -150,8 +149,9 @@ pub fn launch_server(
                 assert!(matches!(
                     receive_request(&mut server.channel_receiver),
                     Err(CommChannelError::ShmChannelLocked),
-                ));
+                )); // assert no remaining async requests
                 server.pos_cuda_ws.stop_and_block(phos_uuid);
+                log::info!("PhOS client restored");
                 // TODO: PhOS currently doesn't preserve flag address across restore.
                 phos::clear_flag(&server.channel_receiver);
                 server.pos_cuda_ws.set_flag_ptr(phos_uuid, server.channel_receiver.flag_ptr().unwrap());
@@ -163,9 +163,5 @@ pub fn launch_server(
         }
     }
 
-    info!("[{}:{}] server #{} (client PID: {}) terminated", std::file!(), std::line!(), server.id, client_pid);
-
-    if is_main_thread {
-        std::process::exit(0);
-    }
+    info!("server #{id} (client PID: {client_pid}) terminated");
 }

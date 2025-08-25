@@ -3,7 +3,7 @@ use std::io::{self, Read as _, Write as _};
 use std::net::TcpListener;
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
-use std::{ptr, thread};
+use std::{process, ptr, thread};
 
 use network::NetworkConfig;
 use server::*;
@@ -95,7 +95,10 @@ fn server_process(config: NetworkConfig, mut rx: io::PipeReader, mut tx: io::Pip
             _ => panic!("Unsupported communication type in config"),
         };
         thread::spawn(move || {
-            launch_server(&child_config, id, client_pid, child_barrier, is_main_thread);
+            launch_server(&child_config, id, client_pid, child_barrier);
+            if is_main_thread {
+                process::exit(0);
+            }
         });
         barrier.map(|barrier| barrier.wait());
         tx.write_all(&id.to_ne_bytes()).unwrap();
