@@ -6,7 +6,7 @@ members = [
     "cudasys",
     "cudasys/hookgen",
     "measure",
-    "network",
+    "network", "phos",
     "server",
 ]
 

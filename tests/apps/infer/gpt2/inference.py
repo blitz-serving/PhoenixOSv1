@@ -64,6 +64,7 @@ for i in range(num_iter):
     with torch.no_grad():
         generated_ids = model.generate(**encoding, max_length=20)
     generated_texts = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+    print(generated_texts)
     
 T2 = time.time()
 print('time used: ', T2-T1)
