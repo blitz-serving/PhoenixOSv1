@@ -16,7 +16,13 @@ if you want to run inference applications, you need to download the model first.
 - [bert-base-uncased](https://huggingface.co/google-bert/bert-base-uncased)
 - [stable-diffusion-v1-4](https://huggingface.co/CompVis/stable-diffusion-v1-4)
 
-if you want to run ResNet application, please create a `checkpoint` folder under `tests/apps/` and run the training application first
+If you want to run ResNet application, please create a `checkpoint` folder under `tests/apps/` and run the training application first. 
+
+If you want to run gpt2 on cuda11, you need to install a specific version of the `transformers` library:
+
+```
+pip install transformers==4.28.0 
+```
 
 ### run applications
 

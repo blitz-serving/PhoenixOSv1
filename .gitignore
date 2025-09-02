@@ -3,6 +3,7 @@
 Cargo.lock
 *.out
 *.pyc
+config.toml
 build/
 xpuremoting/
 tests/apps/infer/BERT-base-uncased/bert-base-uncased

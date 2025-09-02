@@ -1,0 +1,4 @@
+[submodule "phoenixos-criu"]
+	path = third_party/phoenixos-criu
+	url = https://github.com/SJTU-IPADS/PhoenixOS-CRIU.git
+	branch = adapt_cuda_checkpoint
