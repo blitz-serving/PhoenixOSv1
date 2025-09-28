@@ -1,46 +1,37 @@
 #![feature(maybe_uninit_slice)]
+#![feature(write_all_vectored)]
 
 mod dispatcher;
+mod handle;
 
 #[cfg(feature = "phos")]
 mod phos;
+#[cfg(feature = "phos")]
+pub use phos::check_config;
 
-use cudasys::{
-    cuda::CUmodule,
-    cudart::{cudaError_t, cudaGetDeviceCount},
-};
+use cudasys::cudart::{cudaError_t, cudaGetDeviceCount};
 use dispatcher::dispatch;
 
 #[cfg(feature = "rdma")]
 use network::ringbufferchannel::RDMAChannel;
 
 use network::ringbufferchannel::{EmulatorChannel, SHMChannel};
-use network::{tcp, Channel, CommChannel, CommChannelError, NetworkConfig, Transportable};
+use network::{Channel, CommChannel, CommChannelError, NetworkConfig, Transportable, tcp};
 
 use log::{error, info};
 
-use std::collections::BTreeMap;
-
-struct ServerWorker<C> {
+struct ServerWorker {
     pub id: i32,
-    pub channel_sender: C,
-    pub channel_receiver: C,
-    pub modules: Vec<CUmodule>,
-    pub resources: BTreeMap<usize, usize>,
+    pub channel_sender: Channel,
+    pub channel_receiver: Channel,
+    pub resources: handle::HandleManager,
     opt_async_api: bool,
     opt_shadow_desc: bool,
-    #[cfg(feature = "phos")]
-    pub pos_cuda_ws: phos::POSWorkspace_CUDA,
 }
 
-impl<C> Drop for ServerWorker<C> {
-    fn drop(&mut self) {
-        #[cfg(not(feature = "phos"))]
-        for module in &self.modules {
-            unsafe {
-                cudasys::cuda::cuModuleUnload(*module);
-            }
-        }
+impl ServerWorker {
+    pub fn before_call(&self, func: &'static str) {
+        log::debug!(target: func, "[#{}]", self.id);
     }
 }
 
@@ -91,28 +82,14 @@ pub fn launch_server(
     barrier: Option<std::sync::Arc<std::sync::Barrier>>,
 ) {
     let (channel_sender, channel_receiver) = create_buffer(config, id, barrier);
-    info!(
-        "[{}:{}] {} buffer created",
-        std::file!(),
-        std::line!(),
-        config.comm_type
-    );
+    info!("[{}:{}] {} buffer created", std::file!(), std::line!(), config.comm_type);
     let mut max_devices = 0;
     if let cudaError_t::cudaSuccess =
         unsafe { cudaGetDeviceCount(&mut max_devices as *mut ::std::os::raw::c_int) }
     {
-        info!(
-            "[{}:{}] found {} cuda devices",
-            std::file!(),
-            std::line!(),
-            max_devices
-        );
+        info!("[{}:{}] found {} cuda devices", std::file!(), std::line!(), max_devices);
     } else {
-        error!(
-            "[{}:{}] failed to find cuda devices",
-            std::file!(),
-            std::line!()
-        );
+        error!("[{}:{}] failed to find cuda devices", std::file!(), std::line!());
         panic!();
     }
 
@@ -120,23 +97,17 @@ pub fn launch_server(
         id,
         channel_sender,
         channel_receiver,
-        modules: Default::default(),
         resources: Default::default(),
         opt_async_api: config.opt_async_api,
         opt_shadow_desc: config.opt_shadow_desc,
-        #[cfg(feature = "phos")]
-        pos_cuda_ws: phos::POSWorkspace_CUDA::new(),
     };
 
     #[cfg(feature = "phos")]
-    let phos_uuid = {
-        let job_name = phos::recv_job_name(&server.channel_receiver);
-        // TODO: use RAII to destroy the client somewhere
-        let uuid = server.pos_cuda_ws.create_client(&job_name, client_pid as i32);
-        assert_eq!(0, uuid);
-        server.pos_cuda_ws.set_flag_ptr(uuid, server.channel_receiver.flag_ptr().unwrap());
-        uuid
-    };
+    {
+        let flag_ptr = server.channel_receiver.flag_ptr().unwrap();
+    }
+
+    let mut state = HandleDemoState::Disabled;
 
     loop {
         match receive_request(&mut server.channel_receiver) {
@@ -150,18 +121,73 @@ pub fn launch_server(
                     receive_request(&mut server.channel_receiver),
                     Err(CommChannelError::ShmChannelLocked),
                 )); // assert no remaining async requests
-                server.pos_cuda_ws.stop_and_block(phos_uuid);
-                log::info!("PhOS client restored");
-                // TODO: PhOS currently doesn't preserve flag address across restore.
+                phos::checkpoint(); // TODO
+                log::info!("PhOS checkpoint done");
                 phos::clear_flag(&server.channel_receiver);
-                server.pos_cuda_ws.set_flag_ptr(phos_uuid, server.channel_receiver.flag_ptr().unwrap());
+            }
+            #[cfg(feature = "phos")]
+            Err(CommChannelError::RestoreEof) => {
+                state.finish_restore(&mut server);
             }
             Err(e) => {
                 error!("failed to receive request: {e:?}");
                 break;
             }
         }
+        state.reset_and_restore(&mut server);
     }
 
     info!("server #{id} (client PID: {client_pid}) terminated");
+}
+
+enum HandleDemoState {
+    Disabled,
+    Counting(u32),
+    Restoring { channel_sender: Channel, channel_receiver: Channel },
+}
+
+impl HandleDemoState {
+    fn reset_and_restore(&mut self, server: &mut ServerWorker) {
+        if server.resources.len() <= 3 {
+            return;
+        }
+        match self {
+            HandleDemoState::Counting(50..) => {
+                log::info!("{}", server.resources.len());
+                let mut args = Vec::new();
+                log::info!("checkpointing handles...");
+                server.resources.serialize(&mut args).unwrap();
+                log::info!("resetting all handles...");
+                std::mem::take(&mut server.resources);
+                let restore_vec = network::restore::RestoreVec::new(args);
+                log::info!("start restoring...");
+                let channel_sender = std::mem::replace(
+                    &mut server.channel_sender,
+                    Channel::new(Box::new(network::restore::BlackHole)),
+                );
+                let channel_receiver = std::mem::replace(
+                    &mut server.channel_receiver,
+                    Channel::new(Box::new(restore_vec)),
+                );
+                *self = HandleDemoState::Restoring { channel_sender, channel_receiver };
+            }
+            HandleDemoState::Counting(n) => {
+                *n += 1;
+            }
+            _ => {}
+        }
+    }
+
+    fn finish_restore(&mut self, server: &mut ServerWorker) {
+        if let HandleDemoState::Restoring { .. } = self {
+            let HandleDemoState::Restoring { channel_sender, channel_receiver } =
+                std::mem::replace(self, HandleDemoState::Counting(0))
+            else {
+                unreachable!()
+            };
+            server.channel_sender = channel_sender;
+            server.channel_receiver = channel_receiver;
+            log::info!("restoring done");
+        }
+    }
 }

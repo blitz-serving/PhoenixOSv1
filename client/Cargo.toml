@@ -16,11 +16,9 @@ env_logger = { workspace = true }
 small_ctor = "0.1"
 core_affinity = { workspace = true }
 lz4_flex = { version = "0.11", default-features = false }
-elf = "0.7"
+elf = "0.8"
 libc = { workspace = true }
 signal-hook-registry = "1.4"
-serde = { workspace = true, optional = true }
-serde_yaml = { version = "0.9", optional = true }
 
 [build-dependencies]
 cudasys = { workspace = true }
@@ -31,10 +29,10 @@ syn = { workspace = true, optional = true }
 crate-type = ["cdylib"]
 
 [features]
-# default = ["rdma"]
+default = ["phos"]
 rdma = ["network/rdma"]
 passthrough = ["dep:syn"]
-phos = ["dep:serde", "dep:serde_yaml"]
+phos = []
 
 [lints]
 workspace = true

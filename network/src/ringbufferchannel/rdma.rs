@@ -35,8 +35,6 @@ pub struct RDMAChannel {
     last_tail: Cell<usize>,
 }
 
-unsafe impl Send for RDMAChannel {}
-
 impl RDMAChannel {
     pub fn new_server(config: &NetworkConfig, id: i32) -> (Self, Self) {
         let mut addr: SocketAddr = config.receiver_socket.parse().unwrap();

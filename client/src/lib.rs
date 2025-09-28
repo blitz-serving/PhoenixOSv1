@@ -1,3 +1,4 @@
+#![feature(drop_guard)]
 #![feature(thread_local)]
 
 mod dl;

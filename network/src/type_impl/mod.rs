@@ -1,8 +1,8 @@
-use crate::{
-    CommChannel, CommChannelError, RawMemory, RawMemoryMut, Transportable, TransportableMarker,
-};
+use std::{ptr, slice};
 
-impl<T: TransportableMarker> Transportable for T {
+use crate::{CommChannel, CommChannelError, RawMemory, RawMemoryMut, Transportable};
+
+impl<T: Copy> Transportable for T {
     fn send<C: CommChannel>(&self, channel: &C) -> Result<(), CommChannelError> {
         if size_of::<Self>() == 0 {
             return Ok(());
@@ -26,59 +26,13 @@ impl<T: TransportableMarker> Transportable for T {
     }
 }
 
-macro_rules! impl_transportable {
-    ($($t:ty),*) => {
-        $(
-            impl TransportableMarker for $t {}
-        )*
-    };
+pub fn save<T: Copy>(data: &T, output: &mut Vec<u8>) {
+    output.extend_from_slice(unsafe {
+        slice::from_raw_parts(ptr::from_ref(data).cast(), size_of::<T>())
+    });
 }
 
-impl_transportable!(
-    u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, usize, isize, f32, f64, bool, char
-);
-
-impl Transportable for () {
-    fn send<C: CommChannel>(&self, _channel: &C) -> Result<(), CommChannelError> {
-        Ok(())
-    }
-
-    fn recv<C: CommChannel>(&mut self, _channel: &C) -> Result<(), CommChannelError> {
-        Ok(())
-    }
-}
-
-impl<T> TransportableMarker for *const T {}
-impl<T> TransportableMarker for *mut T {}
-impl<T: Copy> TransportableMarker for std::mem::MaybeUninit<T> {}
-
-/// a pointer type, we just need to use usize to represent it
-/// the raw type `*mut void` is hard to handle:(.
-///
-/// IMPORTANT on replacing `*mut *mut` like parameters in memory operations.
-pub type MemPtr = usize;
-
-impl<T: TransportableMarker> Transportable for [T] {
-    fn send<C: CommChannel>(&self, channel: &C) -> Result<(), CommChannelError> {
-        send_slice(self, channel)
-    }
-
-    fn recv<C: CommChannel>(&mut self, channel: &C) -> Result<(), CommChannelError> {
-        recv_slice_to(self, channel)
-    }
-}
-
-impl<T: TransportableMarker> Transportable for Vec<T> {
-    fn send<C: CommChannel>(&self, channel: &C) -> Result<(), CommChannelError> {
-        send_slice(self, channel)
-    }
-
-    fn recv<C: CommChannel>(&mut self, channel: &C) -> Result<(), CommChannelError> {
-        recv_slice(channel).map(|slice| *self = slice.into_vec())
-    }
-}
-
-pub fn send_slice<T: TransportableMarker, C: CommChannel>(
+pub fn send_slice<T: Copy, C: CommChannel>(
     data: &[T],
     channel: &C,
 ) -> Result<(), CommChannelError> {
@@ -92,9 +46,7 @@ pub fn send_slice<T: TransportableMarker, C: CommChannel>(
     }
 }
 
-pub fn recv_slice<T: TransportableMarker, C: CommChannel>(
-    channel: &C,
-) -> Result<Box<[T]>, CommChannelError> {
+pub fn recv_slice<T: Copy, C: CommChannel>(channel: &C) -> Result<Box<[T]>, CommChannelError> {
     let mut len = 0;
     len.recv(channel)?;
     let mut data = Box::<[T]>::new_uninit_slice(len);
@@ -106,7 +58,7 @@ pub fn recv_slice<T: TransportableMarker, C: CommChannel>(
     }
 }
 
-pub fn recv_slice_to<T: TransportableMarker, C: CommChannel>(
+pub fn recv_slice_to<T: Copy, C: CommChannel>(
     data: &mut [T],
     channel: &C,
 ) -> Result<(), CommChannelError> {
@@ -121,13 +73,19 @@ pub fn recv_slice_to<T: TransportableMarker, C: CommChannel>(
     }
 }
 
+pub fn save_slice<T: Copy>(data: &[T], output: &mut Vec<u8>) {
+    let len = data.len();
+    save(&len, output);
+    output.extend_from_slice(unsafe {
+        slice::from_raw_parts(data.as_ptr().cast(), size_of_val(data))
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ringbufferchannel::{LocalChannel, META_AREA},
-        Channel,
-    };
+    use crate::Channel;
+    use crate::ringbufferchannel::{LocalChannel, META_AREA};
 
     /// Test bool Transportable impl
     #[test]
@@ -157,8 +115,8 @@ mod tests {
         let mut channel = Channel::new(Box::new(LocalChannel::new(10 + META_AREA)));
         let a = [1u8, 2, 3, 4, 5];
         let mut b = [0u8; 5];
-        a.send(&mut channel).unwrap();
-        b.recv(&mut channel).unwrap();
+        send_slice(&a, &mut channel).unwrap();
+        recv_slice_to(&mut b, &mut channel).unwrap();
         assert_eq!(a, b);
     }
 
@@ -168,19 +126,8 @@ mod tests {
         let mut channel = Channel::new(Box::new(LocalChannel::new(50 + META_AREA)));
         let a = [1i32, 2, 3, 4, 5];
         let mut b = [0i32; 5];
-        a.send(&mut channel).unwrap();
-        b.recv(&mut channel).unwrap();
-        assert_eq!(a, b);
-    }
-
-    /// Test Vec<i32> Transportable impl
-    #[test]
-    fn test_vec_io() {
-        let mut channel = Channel::new(Box::new(LocalChannel::new(50 + META_AREA)));
-        let a = vec![1, 2, 3, 4, 5];
-        let mut b = vec![0; 5];
-        a.send(&mut channel).unwrap();
-        b.recv(&mut channel).unwrap();
+        send_slice(&a, &mut channel).unwrap();
+        recv_slice_to(&mut b, &mut channel).unwrap();
         assert_eq!(a, b);
     }
 }

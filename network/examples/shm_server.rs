@@ -1,7 +1,7 @@
 fn main() {
     #[cfg(target_os = "linux")]
     {
-        use network::{ringbufferchannel::SHMChannel, Channel, Transportable};
+        use network::{ringbufferchannel::SHMChannel, Channel, type_impl::recv_slice_to};
         use std::boxed::Box;
 
         let shm_name = "/stoc";
@@ -10,7 +10,7 @@ fn main() {
 
         loop {
             let mut dst = [0u8; 5];
-            let res = dst.recv(&mut channel);
+            let res = recv_slice_to(&mut dst, &mut channel);
             match res {
                 Ok(()) => {
                     println!("Received {:?}", dst);

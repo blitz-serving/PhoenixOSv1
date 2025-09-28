@@ -13,7 +13,7 @@ fn main() {
     // core_affinity::set_for_current(0);
     let config = NetworkConfig::read_from_file();
     #[cfg(feature = "phos")]
-    assert_eq!(config.comm_type, "shm", "PhOS only supports SHM communication");
+    check_config(&config);
     match config.comm_type.as_str() {
         "shm" => {
             log::info!("Using shared memory channel")

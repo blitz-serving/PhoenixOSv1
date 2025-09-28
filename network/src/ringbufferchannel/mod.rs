@@ -259,6 +259,7 @@ impl Drop for LocalChannel {
 
 impl LocalChannel {
     pub fn new(size: usize) -> LocalChannel {
+        assert!(size > META_AREA);
         let channel = LocalChannel {
             ptr: utils::allocate_cache_line_aligned(size, CACHE_LINE_SZ).as_ptr(),
             size,

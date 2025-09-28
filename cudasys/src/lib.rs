@@ -1,7 +1,5 @@
 #![expect(non_snake_case)]
 
-pub use num_traits::FromPrimitive;
-
 // Type definitions extracted from the bindings.
 pub mod types;
 

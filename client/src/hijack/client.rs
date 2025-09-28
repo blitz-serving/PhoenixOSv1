@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
-use std::ffi::{c_char, c_int, c_uint, c_void};
+use std::ffi::{CStr, c_char, c_int, c_uint, c_void};
 use std::io::{Read as _, Write as _};
 use std::net::TcpStream;
 use std::sync::RwLock;
@@ -11,7 +11,8 @@ use cudasys::types::cuda::{CUfunction, CUmodule};
 #[cfg(feature = "rdma")]
 use network::ringbufferchannel::RDMAChannel;
 use network::ringbufferchannel::{EmulatorChannel, SHMChannel};
-use network::{tcp, Channel, CommChannel, Transportable};
+use network::session::SendSession;
+use network::{Channel, tcp};
 
 use crate::elf::{FatBinaryHeader, KernelParamInfo};
 
@@ -19,7 +20,6 @@ pub struct ClientThread {
     pub id: i32,
     pub channel_sender: Channel,
     pub channel_receiver: Channel,
-    pub resource_idx: usize,
     pub cuda_device: Option<c_int>,
     pub cuda_device_init: bool,
     pub cuda_pctx_flags: Option<c_uint>,
@@ -43,11 +43,6 @@ impl ClientThread {
             }
         }
         let config = network::NetworkConfig::read_from_file();
-        #[cfg(feature = "phos")]
-        let phos_job_name = {
-            assert_eq!(config.comm_type, "shm", "PhOS only supports SHM communication");
-            crate::phos::read_job_name()
-        };
         let id = {
             let mut stream = TcpStream::connect(&config.daemon_socket).unwrap();
             stream.write_all(&process::id().to_be_bytes()).unwrap();
@@ -95,14 +90,10 @@ impl ClientThread {
             signal_hook_registry::register_sigaction(libc::SIGTERM, atsignal).unwrap();
         }
 
-        #[cfg(feature = "phos")]
-        crate::phos::send_job_name(&phos_job_name, &channel_sender);
-
         Self {
             id,
             channel_sender,
             channel_receiver,
-            resource_idx: 0,
             cuda_device: None,
             cuda_device_init: false,
             cuda_pctx_flags: None,
@@ -112,7 +103,16 @@ impl ClientThread {
         }
     }
 
-    pub fn before_call(&mut self) {
+    pub fn with_borrow<F: FnOnce(&Self) -> R, R>(f: F) -> R {
+        CLIENT_THREAD.with_borrow(f)
+    }
+
+    pub fn with_borrow_mut<F: FnOnce(&mut Self) -> R, R>(f: F) -> R {
+        CLIENT_THREAD.with_borrow_mut(f)
+    }
+
+    pub fn before_call(&mut self, name: &'static str) {
+        log::debug!(target: name, "[#{}]", self.id);
         #[cfg(feature = "phos")]
         crate::phos::set_client_flag_blocking(&self.channel_sender);
     }
@@ -125,14 +125,15 @@ impl ClientThread {
 
 impl Drop for ClientThread {
     fn drop(&mut self) {
-        let proc_id = -1;
-        proc_id.send(&self.channel_sender).unwrap();
-        self.channel_sender.flush_out().unwrap();
+        let proc_id: i32 = -1;
+        let send_ctx = SendSession::begin(self.id, &self.channel_sender, "drop");
+        send_ctx.send(&proc_id, "proc_id");
+        send_ctx.finish();
     }
 }
 
 thread_local! {
-    pub static CLIENT_THREAD: RefCell<ClientThread> = RefCell::new(ClientThread::new());
+    static CLIENT_THREAD: RefCell<ClientThread> = RefCell::new(ClientThread::new());
     static CLIENT_THREAD_INIT: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -141,9 +142,9 @@ pub static RUNTIME_CACHE: RwLock<RuntimeCache> = RwLock::new(RuntimeCache::new()
 
 pub struct DriverCache {
     /// Used in `cuModuleGetFunction`, populated by `cuModuleLoadData`.
-    pub images: BTreeMap<CUmodule, Cow<'static, [u8]>>,
+    images: BTreeMap<CUmodule, Cow<'static, [u8]>>,
     /// Used in `cuLaunchKernel`, populated by `cuModuleGetFunction`.
-    pub function_params: BTreeMap<CUfunction, Box<[KernelParamInfo]>>,
+    function_params: BTreeMap<CUfunction, Box<[KernelParamInfo]>>,
 }
 
 // The pointers are server-side.
@@ -152,10 +153,31 @@ unsafe impl Sync for DriverCache {}
 
 impl DriverCache {
     const fn new() -> Self {
-        Self {
-            images: BTreeMap::new(),
-            function_params: BTreeMap::new(),
-        }
+        Self { images: BTreeMap::new(), function_params: BTreeMap::new() }
+    }
+
+    pub fn insert_image(&mut self, module: CUmodule, image: &'static [u8], is_runtime: bool) {
+        let image = if is_runtime {
+            Cow::Borrowed(image)
+        } else {
+            Cow::Owned(image.to_vec())
+        };
+        assert!(self.images.insert(module, image).is_none());
+    }
+
+    pub fn insert_function(&mut self, hfunc: CUfunction, hmod: CUmodule, name: &CStr) {
+        let image = self.images.get(&hmod).unwrap();
+        let name = name.to_str().unwrap();
+        let params = if let Some(fatbin) = FatBinaryHeader::cast(image.as_ptr()) {
+            fatbin.find_kernel_params(name)
+        } else {
+            crate::elf::find_kernel_params(image, name)
+        };
+        assert!(self.function_params.insert(hfunc, params).is_none());
+    }
+
+    pub fn get_params(&self, f: CUfunction) -> &[KernelParamInfo] {
+        self.function_params.get(&f).unwrap()
     }
 }
 
@@ -199,7 +221,7 @@ impl FatBinaryHandle {
         Self((index + 1) << 4)
     }
 
-    pub fn to_index(&self) -> usize {
+    pub fn to_index(self) -> usize {
         (self.0 >> 4) - 1
     }
 }

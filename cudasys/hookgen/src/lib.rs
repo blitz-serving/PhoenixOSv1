@@ -419,7 +419,7 @@ fn generate_bare_hooks(
     body: fn(&Signature) -> Option<Box<Block>>,
 ) {
     let mut items = imports.to_vec();
-    let attrs = vec![parse_quote! { #[no_mangle] }];
+    let attrs = vec![parse_quote! { #[unsafe(no_mangle)] }];
     let abi = Some(parse_quote!(extern "C"));
     for mut sig in bindings.into_values() {
         let Some(block) = body(&sig) else { continue };

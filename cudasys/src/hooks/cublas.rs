@@ -6,20 +6,26 @@ use std::os::raw::*;
 type HackedAssumeFloat = f32;
 
 #[cuda_hook(proc_id = 1100)]
-fn cublasCreate_v2(handle: *mut cublasHandle_t) -> cublasStatus_t;
+fn cublasCreate_v2(#[handle = "create"] handle: *mut cublasHandle_t) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1101)]
-fn cublasDestroy_v2(handle: cublasHandle_t) -> cublasStatus_t;
+fn cublasDestroy_v2(#[handle = "destroy"] handle: cublasHandle_t) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1104, async_api)]
-fn cublasSetStream_v2(handle: cublasHandle_t, streamId: cudaStream_t) -> cublasStatus_t;
+fn cublasSetStream_v2(
+    #[handle = "modify"] handle: cublasHandle_t,
+    #[handle = "use"] streamId: cudaStream_t,
+) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1119, async_api)]
-fn cublasSetMathMode(handle: cublasHandle_t, mode: cublasMath_t) -> cublasStatus_t;
+fn cublasSetMathMode(
+    #[handle = "modify"] handle: cublasHandle_t,
+    mode: cublasMath_t,
+) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1300, async_api)]
 fn cublasSgemm_v2(
-    handle: cublasHandle_t,
+    #[handle = "use"] handle: cublasHandle_t,
     transa: cublasOperation_t,
     transb: cublasOperation_t,
     m: c_int,
@@ -37,7 +43,7 @@ fn cublasSgemm_v2(
 
 #[cuda_hook(proc_id = 1313, async_api)]
 fn cublasSgemmStridedBatched(
-    handle: cublasHandle_t,
+    #[handle = "use"] handle: cublasHandle_t,
     transa: cublasOperation_t,
     transb: cublasOperation_t,
     m: c_int,
@@ -58,11 +64,14 @@ fn cublasSgemmStridedBatched(
 ) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1120)]
-fn cublasGetMathMode(handle: cublasHandle_t, mode: *mut cublasMath_t) -> cublasStatus_t;
+fn cublasGetMathMode(
+    #[handle = "use"] handle: cublasHandle_t,
+    mode: *mut cublasMath_t,
+) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1441, async_api)]
 fn cublasGemmEx(
-    handle: cublasHandle_t,
+    #[handle = "use"] handle: cublasHandle_t,
     transa: cublasOperation_t,
     transb: cublasOperation_t,
     m: c_int,
@@ -85,7 +94,7 @@ fn cublasGemmEx(
 
 #[cuda_hook(proc_id = 1443, async_api)]
 fn cublasGemmStridedBatchedEx(
-    handle: cublasHandle_t,
+    #[handle = "use"] handle: cublasHandle_t,
     transa: cublasOperation_t,
     transb: cublasOperation_t,
     m: c_int,
@@ -112,7 +121,7 @@ fn cublasGemmStridedBatchedEx(
 
 #[cuda_hook(proc_id = 1105)]
 fn cublasSetWorkspace_v2(
-    handle: cublasHandle_t,
+    #[handle = "modify"] handle: cublasHandle_t,
     #[device] workspace: *mut c_void,
     workspaceSizeInBytes: usize,
 ) -> cublasStatus_t;
@@ -137,7 +146,7 @@ fn cublasSetMatrixAsync(
     lda: c_int,
     #[device] B: *mut c_void,
     ldb: c_int,
-    stream: cudaStream_t,
+    #[handle = "use"] stream: cudaStream_t,
 ) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1112)]
@@ -153,7 +162,7 @@ fn cublasGetMatrix(
 
 #[cuda_hook(proc_id = 1182)]
 fn cublasSscal_v2(
-    handle: cublasHandle_t,
+    #[handle = "use"] handle: cublasHandle_t,
     n: c_int,
     #[host] alpha: *const f32, // FIXME: safe until we support cublasSetPointerMode()
     #[device] x: *mut f32,

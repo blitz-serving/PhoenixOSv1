@@ -4,8 +4,6 @@ macro_rules! success_return_value {
     ($ty:ident::$variant:ident) => {
         const _: () = {
             assert!($ty::$variant as u32 == 0);
-            const fn test_num_derive<T: crate::FromPrimitive>() {}
-            test_num_derive::<$ty>(); // see `DeriveCallback` in `build.rs`
         };
         impl Default for $ty {
             #[inline(always)]

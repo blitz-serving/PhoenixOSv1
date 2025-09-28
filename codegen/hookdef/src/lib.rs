@@ -6,7 +6,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{quote, TokenStreamExt as _};
 use syn::meta::{self, ParseNestedMeta};
 use syn::parse::{Parse, ParseStream, Parser};
-use syn::spanned::Spanned;
+use syn::spanned::Spanned as _;
 use syn::{
     Attribute, Block, Error, Expr, ExprBlock, FnArg, LitBool, LitInt, Meta, Result, Signature,
     Stmt, Token, Type,

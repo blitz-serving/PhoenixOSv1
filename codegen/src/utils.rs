@@ -1,57 +1,45 @@
 use hookdef::last_seg;
-use quote::{format_ident, quote_spanned, ToTokens};
+use proc_macro2::{Ident, Span, TokenStream};
+use quote::{quote, quote_spanned};
 use syn::spanned::Spanned as _;
-use syn::{Expr, Ident, Type, TypePtr};
+use syn::{Expr, Type, TypePtr};
 
-/// - "type", - "*mut type"
-/// the former is input to native function,
-/// the latter is output from native function
-#[derive(PartialEq, Eq)]
-pub enum ElementMode {
-    Input,
-    Output,
-    Skip,
-}
-
-pub struct Element {
-    pub name: Ident,
-    pub ty: Type,
-    pub mode: ElementMode,
-    pub pass_by: PassBy,
-    pub is_void_ptr: bool,
-}
-
-impl Element {
-    pub fn get_exe_ptr_ident(&self) -> Ident {
-        format_ident!("{}__ptr", self.name)
-    }
-}
-
-pub enum PassBy {
-    InputValue,
-    SinglePtr,
-    ArrayPtr { len: Box<Expr>, cap: Option<Box<Expr>> },
-    InputCStr,
-}
-
-pub fn is_shadow_desc_type(ty: &Type) -> bool {
-    [
-        "cudnnTensorDescriptor_t",
-        "cudnnFilterDescriptor_t",
-        "cudnnConvolutionDescriptor_t",
-    ]
-    .contains(&ty.to_token_stream().to_string().as_str())
+pub fn is_handle_type(ty: &Type) -> bool {
+    let Some(ident) = last_seg(ty) else { return false };
+    matches!(
+        ident.to_string().as_str(),
+        "CUcontext"
+            | "CUstream"
+            | "CUmodule"
+            | "CUfunction"
+            | "cudaStream_t"
+            | "cudaEvent_t"
+            // | "cudaIpcMemHandle_t"
+            | "cudnnHandle_t"
+            | "cudnnActivationDescriptor_t"
+            | "cudnnConvolutionDescriptor_t"
+            | "cudnnFilterDescriptor_t"
+            | "cudnnTensorDescriptor_t"
+            | "cudnnBackendDescriptor_t"
+            | "cublasHandle_t"
+            | "cublasLtHandle_t"
+            | "cublasLtMatmulDesc_t"
+            | "cublasLtMatrixLayout_t"
+            | "cublasLtMatmulPreference_t"
+    )
 }
 
 pub fn is_async_return_type(ty: &Type) -> bool {
-    [
-        "cublasStatus_t",
-        "CUresult",
-        "cudaError_t",
-        "cudnnStatus_t",
-        "nvmlReturn_t",
-        "ncclResult_t",
-    ].contains(&ty.to_token_stream().to_string().as_str())
+    let Some(ident) = last_seg(ty) else { return false };
+    matches!(
+        ident.to_string().as_str(),
+        "CUresult"
+            | "cudaError_t"
+            | "nvmlReturn_t"
+            | "cudnnStatus_t"
+            | "cublasStatus_t"
+            | "ncclResult_t"
+    )
 }
 
 pub fn is_void_ptr(ptr: &TypePtr) -> bool {
@@ -62,9 +50,15 @@ pub fn is_const_cstr(ptr: &TypePtr) -> bool {
     ptr.const_token.is_some() && last_seg(&ptr.elem).is_some_and(|seg| seg == "c_char")
 }
 
-pub fn define_usize_from(ident: &Ident, expr: &Expr) -> proc_macro2::TokenStream {
-    quote_spanned! {expr.span()=>
+pub fn usize_from(expr: &Expr) -> TokenStream {
+    let try_into = quote_spanned!(expr.span()=> try_into);
+    quote!({
         #[allow(clippy::useless_conversion)]
-        let #ident = usize::try_from((#expr).to_owned()).unwrap();
-    }
+        let i: usize = (#expr).to_owned().#try_into().unwrap();
+        i
+    })
+}
+
+pub fn result_ident() -> Ident {
+    Ident::new("hook_result", Span::call_site())
 }

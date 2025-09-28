@@ -1,7 +1,7 @@
 use cudasys::types::cudnn::*;
 use std::os::raw::*;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudnnGetErrorString(
     error_status: cudnnStatus_t,
 ) -> *const c_char {
@@ -11,7 +11,7 @@ pub extern "C" fn cudnnGetErrorString(
     c_str.into_raw()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn cudnnBackendGetAttribute(
     descriptor: cudnnBackendDescriptor_t,
     attributeName: cudnnBackendAttributeName_t,

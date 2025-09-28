@@ -4,12 +4,15 @@ use std::error::Error;
 use std::boxed::Box;
 use std::fmt;
 
+pub mod restore;
 pub mod ringbufferchannel;
+pub mod session;
 pub mod tcp;
 pub mod type_impl;
 
 pub use ringbufferchannel::types::NsTimestamp;
 
+// TODO: add job name
 #[derive(Default, Deserialize)]
 pub struct NetworkConfig {
     pub comm_type: String,
@@ -118,6 +121,7 @@ pub enum CommChannelError {
     BlockOperation,
     // Add other relevant errors
     ShmChannelLocked,
+    RestoreEof,
 }
 
 impl fmt::Display for CommChannelError {
@@ -209,7 +213,7 @@ impl Channel {
 }
 
 /// communication interface
-pub trait CommChannelInner: CommChannelInnerIO + Send + Any {
+pub trait CommChannelInner: CommChannelInnerIO + Any {
     fn flush_out(&self) -> Result<(), CommChannelError>;
 
     fn recv_ts(&self) -> Result<(), CommChannelError> {
@@ -238,5 +242,3 @@ pub trait Transportable {
 
     fn recv<C: CommChannel>(&mut self, channel: &C) -> Result<(), CommChannelError>;
 }
-
-pub trait TransportableMarker: Copy {}

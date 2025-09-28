@@ -9,8 +9,8 @@ use std::borrow::Cow;
 use std::ffi::{c_int, c_uint, c_ulonglong, c_ushort};
 use std::{ptr, slice};
 
-use elf::endian::NativeEndian;
 use elf::ElfBytes;
+use elf::endian::NativeEndian;
 use lz4_flex::decompress;
 
 #[repr(C, packed)]
@@ -45,24 +45,19 @@ pub struct FatBinaryHeader {
 const _: () = assert!(size_of::<FatBinaryHeader>() == 16);
 
 impl FatBinaryHeader {
-    fn validate(&self) {
-        let Self { magic: 0xBA55ED50, version: 1, header_size: 16, .. } = self else {
-            panic!("invalid fatbin header: {self:#x?}");
-        };
-    }
-
-    pub fn is_fat_binary(image: *const u8) -> bool {
+    pub fn cast<'a>(image: *const u8) -> Option<&'a Self> {
         let header: &Self = unsafe { &*image.cast() };
-        matches!(header, Self { magic: 0xBA55ED50, version: 1, header_size: 16, .. })
+        match header {
+            Self { magic: 0xBA55ED50, version: 1, header_size: 16, .. } => Some(header),
+            _ => None,
+        }
     }
 
     pub fn entire_len(&self) -> usize {
-        self.validate();
         self.header_size as usize + self.fat_size as usize
     }
 
     fn code_iter(&self) -> CodeIter {
-        self.validate();
         let payload: *const u8 = ptr::from_ref(self).wrapping_add(1).cast();
         let end = payload.wrapping_add(self.fat_size as usize);
         CodeIter { payload, end }
@@ -223,7 +218,7 @@ fn parse_params(nvinfo: &[u8]) -> Box<[KernelParamInfo]> {
     let (mut param_bytes, mut is_cbank) = (0, false);
     let mut params = Vec::new();
     while i < nvinfo.len() {
-        debug_assert!(i % 4 == 0);
+        debug_assert!(i.is_multiple_of(4));
         let [format, attr, b0, b1] = nvinfo[i..i + 4] else { unreachable!() };
         i += 4;
         match format {
@@ -244,7 +239,7 @@ fn parse_params(nvinfo: &[u8]) -> Box<[KernelParamInfo]> {
             }
             EIFMT_SVAL => {
                 let len = u16::from_le_bytes([b0, b1]) as usize;
-                debug_assert!(len % 4 == 0);
+                debug_assert!(len.is_multiple_of(4));
                 if attr == EIATTR_KPARAM_INFO {
                     assert_eq!(len, size_of::<KernelParamInfo>());
                     assert!(i + len <= nvinfo.len());

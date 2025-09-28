@@ -1,18 +1,26 @@
-pub fn pack_kernel_args(
-    arg_ptrs: *mut *mut std::ffi::c_void,
-    info: &[crate::elf::KernelParamInfo],
-) -> Box<[u8]> {
+use std::ffi::c_void;
+use std::{ptr, slice};
+
+use cudasys::cuda::CUfunction;
+
+use crate::hijack::client::DRIVER_CACHE;
+
+pub fn pack_kernel_args(f: CUfunction, arg_ptrs: *mut *mut c_void) -> Box<[u8]> {
+    let driver = DRIVER_CACHE.read().unwrap();
+    let info = driver.get_params(f);
     let Some(last) = info.last() else { return Default::default() };
     let mut result = vec![0u8; (last.offset + last.size()) as usize];
-    for (param, arg_ptr) in
-        info.iter().zip(unsafe { std::slice::from_raw_parts(arg_ptrs, info.len()) })
-    {
+    let arg_ptrs = unsafe { slice::from_raw_parts(arg_ptrs, info.len()) };
+    for (param, arg_ptr) in info.iter().zip(arg_ptrs) {
         unsafe {
-            std::ptr::copy_nonoverlapping(
+            ptr::copy_nonoverlapping(
                 arg_ptr.cast(),
-                result.as_mut_ptr().wrapping_add(param.offset as usize),
+                result.as_mut_ptr().add(param.offset as usize),
                 param.size() as usize,
             );
+        }
+        if log::max_level() < log::Level::Trace {
+            continue;
         }
         match param.size() {
             8 if arg_ptr.cast::<u64>().is_aligned() => {
@@ -24,7 +32,7 @@ pub fn pack_kernel_args(
                 log::trace!(target: "cuLaunchKernel", "arg = {arg}");
             }
             size => log::trace!(target: "cuLaunchKernel", "arg<{size}> = {:?}", unsafe {
-                std::slice::from_raw_parts(arg_ptr.cast::<u8>(), param.size() as usize)
+                slice::from_raw_parts(arg_ptr.cast::<u8>(), param.size() as usize)
             }),
         }
     }

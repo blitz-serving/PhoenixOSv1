@@ -6,40 +6,40 @@ use std::os::raw::*;
 type HackedAssumeDouble = f64;
 
 #[cuda_hook(proc_id = 1500)]
-fn cublasLtCreate(lightHandle: *mut cublasLtHandle_t) -> cublasStatus_t;
+fn cublasLtCreate(#[handle = "create"] lightHandle: *mut cublasLtHandle_t) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1501)]
-fn cublasLtDestroy(lightHandle: cublasLtHandle_t) -> cublasStatus_t;
+fn cublasLtDestroy(#[handle = "destroy"] lightHandle: cublasLtHandle_t) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1511)]
 fn cublasLtMatmul(
-    lightHandle: cublasLtHandle_t,
-    computeDesc: cublasLtMatmulDesc_t,
+    #[handle = "use"] lightHandle: cublasLtHandle_t,
+    #[handle = "use"] computeDesc: cublasLtMatmulDesc_t,
     #[host] alpha: *const HackedAssumeDouble, // FIXME: safe until we support setting pointer mode
     #[device] A: *const c_void,
-    Adesc: cublasLtMatrixLayout_t,
+    #[handle = "use"] Adesc: cublasLtMatrixLayout_t,
     #[device] B: *const c_void,
-    Bdesc: cublasLtMatrixLayout_t,
+    #[handle = "use"] Bdesc: cublasLtMatrixLayout_t,
     #[host] beta: *const HackedAssumeDouble,
     #[device] C: *const c_void,
-    Cdesc: cublasLtMatrixLayout_t,
+    #[handle = "use"] Cdesc: cublasLtMatrixLayout_t,
     #[device] D: *mut c_void,
-    Ddesc: cublasLtMatrixLayout_t,
+    #[handle = "use"] Ddesc: cublasLtMatrixLayout_t,
     #[host] algo: *const cublasLtMatmulAlgo_t, // FIXME: nullable
     #[device] workspace: *mut c_void,
     workspaceSizeInBytes: usize,
-    stream: cudaStream_t,
+    #[handle = "use"] stream: cudaStream_t,
 ) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1516)]
 fn cublasLtMatmulAlgoGetHeuristic(
-    lightHandle: cublasLtHandle_t,
-    operationDesc: cublasLtMatmulDesc_t,
-    Adesc: cublasLtMatrixLayout_t,
-    Bdesc: cublasLtMatrixLayout_t,
-    Cdesc: cublasLtMatrixLayout_t,
-    Ddesc: cublasLtMatrixLayout_t,
-    preference: cublasLtMatmulPreference_t,
+    #[handle = "use"] lightHandle: cublasLtHandle_t,
+    #[handle = "use"] operationDesc: cublasLtMatmulDesc_t,
+    #[handle = "use"] Adesc: cublasLtMatrixLayout_t,
+    #[handle = "use"] Bdesc: cublasLtMatrixLayout_t,
+    #[handle = "use"] Cdesc: cublasLtMatrixLayout_t,
+    #[handle = "use"] Ddesc: cublasLtMatrixLayout_t,
+    #[handle = "use"] preference: cublasLtMatmulPreference_t,
     requestedAlgoCount: c_int,
     #[host(output, len = requestedAlgoCount)]
     heuristicResultsArray: *mut cublasLtMatmulHeuristicResult_t,
@@ -48,17 +48,19 @@ fn cublasLtMatmulAlgoGetHeuristic(
 
 #[cuda_hook(proc_id = 1519)]
 fn cublasLtMatmulDescCreate(
-    matmulDesc: *mut cublasLtMatmulDesc_t,
+    #[handle = "create"] matmulDesc: *mut cublasLtMatmulDesc_t,
     computeType: cublasComputeType_t,
     scaleType: cudaDataType_t,
 ) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1521)]
-fn cublasLtMatmulDescDestroy(matmulDesc: cublasLtMatmulDesc_t) -> cublasStatus_t;
+fn cublasLtMatmulDescDestroy(
+    #[handle = "destroy"] matmulDesc: cublasLtMatmulDesc_t,
+) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1523)]
 fn cublasLtMatmulDescSetAttribute(
-    matmulDesc: cublasLtMatmulDesc_t,
+    #[handle = "modify"] matmulDesc: cublasLtMatmulDesc_t,
     attr: cublasLtMatmulDescAttributes_t,
     #[host(len = sizeInBytes)] buf: *const c_void,
     sizeInBytes: usize,
@@ -69,14 +71,18 @@ fn cublasLtMatmulDescSetAttribute(
 }
 
 #[cuda_hook(proc_id = 1524)]
-fn cublasLtMatmulPreferenceCreate(pref: *mut cublasLtMatmulPreference_t) -> cublasStatus_t;
+fn cublasLtMatmulPreferenceCreate(
+    #[handle = "create"] pref: *mut cublasLtMatmulPreference_t,
+) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1526)]
-fn cublasLtMatmulPreferenceDestroy(pref: cublasLtMatmulPreference_t) -> cublasStatus_t;
+fn cublasLtMatmulPreferenceDestroy(
+    #[handle = "destroy"] pref: cublasLtMatmulPreference_t,
+) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1528)]
 fn cublasLtMatmulPreferenceSetAttribute(
-    pref: cublasLtMatmulPreference_t,
+    #[handle = "modify"] pref: cublasLtMatmulPreference_t,
     attr: cublasLtMatmulPreferenceAttributes_t,
     #[host(len = sizeInBytes)] buf: *const c_void,
     sizeInBytes: usize,
@@ -84,7 +90,7 @@ fn cublasLtMatmulPreferenceSetAttribute(
 
 #[cuda_hook(proc_id = 1529)]
 fn cublasLtMatrixLayoutCreate(
-    matLayout: *mut cublasLtMatrixLayout_t,
+    #[handle = "create"] matLayout: *mut cublasLtMatrixLayout_t,
     type_: cudaDataType,
     rows: u64,
     cols: u64,
@@ -92,4 +98,6 @@ fn cublasLtMatrixLayoutCreate(
 ) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1531)]
-fn cublasLtMatrixLayoutDestroy(matLayout: cublasLtMatrixLayout_t) -> cublasStatus_t;
+fn cublasLtMatrixLayoutDestroy(
+    #[handle = "destroy"] matLayout: cublasLtMatrixLayout_t,
+) -> cublasStatus_t;

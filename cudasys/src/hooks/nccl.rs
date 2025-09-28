@@ -38,7 +38,7 @@ fn ncclSend(
     datatype: ncclDataType_t,
     peer: c_int,
     comm: ncclComm_t,
-    stream: cudaStream_t,
+    #[handle = "use"] stream: cudaStream_t,
 ) -> ncclResult_t;
 
 #[cuda_hook(proc_id = 3209, async_api)]
@@ -48,7 +48,7 @@ fn ncclRecv(
     datatype: ncclDataType_t,
     peer: c_int,
     comm: ncclComm_t,
-    stream: cudaStream_t,
+    #[handle = "use"] stream: cudaStream_t,
 ) -> ncclResult_t;
 
 #[cuda_hook(proc_id = 3210, async_api)]
@@ -59,7 +59,7 @@ fn ncclAllReduce(
     datatype: ncclDataType_t,
     op: ncclRedOp_t,
     comm: ncclComm_t,
-    stream: cudaStream_t,
+    #[handle = "use"] stream: cudaStream_t,
 ) -> ncclResult_t;
 
 #[cuda_hook(proc_id = 3211)]
@@ -84,5 +84,5 @@ fn ncclBcast(
     datatype: ncclDataType_t,
     root: c_int,
     comm: ncclComm_t,
-    stream: cudaStream_t,
+    #[handle = "use"] stream: cudaStream_t,
 ) -> ncclResult_t;

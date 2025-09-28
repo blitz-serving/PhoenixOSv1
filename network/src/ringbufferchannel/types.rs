@@ -1,4 +1,3 @@
-use crate::TransportableMarker;
 use std::time::UNIX_EPOCH;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
@@ -22,5 +21,3 @@ impl NsTimestamp {
         }
     }
 }
-
-impl TransportableMarker for NsTimestamp {}

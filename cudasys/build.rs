@@ -1,4 +1,3 @@
-use bindgen::callbacks::{DeriveInfo, ParseCallbacks};
 use glob::glob;
 use regex::Regex;
 use std::{
@@ -51,31 +50,6 @@ pub fn find_cuda() -> (Vec<PathBuf>, Vec<PathBuf>) {
     }
     eprintln!("Found CUDA paths: {:?}", valid_paths);
     (candidates, valid_paths)
-}
-
-#[derive(Debug)]
-struct DeriveCallback;
-
-impl ParseCallbacks for DeriveCallback {
-    fn add_derives(&self, info: &DeriveInfo<'_>) -> Vec<String> {
-        if matches!(
-            info.name,
-            "cudaError_enum"
-                | "cudaError"
-                | "nvmlReturn_enum"
-                | "cudnnStatus_t"
-                | "cublasStatus_t"
-                | "nvrtcResult"
-                | "ncclResult_t"
-        ) {
-            vec![
-                "num_derive::FromPrimitive".to_owned(),
-                "codegen::Transportable".to_owned(),
-            ]
-        } else {
-            vec!["codegen::Transportable".to_owned()]
-        }
-    }
 }
 
 /// Read the file, split it into two parts: one with the types and the other with the functions.
@@ -158,7 +132,6 @@ fn bind_gen(
         // Disable documentation comments from being generated
         .generate_comments(false)
         .generate_cstr(true)
-        .parse_callbacks(Box::new(DeriveCallback))
         .opaque_type("FILE");
 
     // Add include paths

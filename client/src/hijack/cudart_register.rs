@@ -1,9 +1,14 @@
 #![expect(non_snake_case)]
-use super::*;
 
 use std::cell::OnceCell;
+use std::ffi::{CStr, c_char, c_int};
+use std::ptr;
 
-#[no_mangle]
+use cudasys::types::cudart::*;
+
+use super::*;
+
+#[unsafe(no_mangle)]
 extern "C" fn __cudaRegisterFatBinary(fatCubin: *const FatBinaryWrapper) -> FatBinaryHandle {
     let fatCubin = unsafe { (*fatCubin).unwrap() };
 
@@ -19,35 +24,34 @@ extern "C" fn __cudaRegisterFatBinary(fatCubin: *const FatBinaryWrapper) -> FatB
     FatBinaryHandle::from_index(runtime.lazy_fatbins.len() - 1)
 }
 
-#[no_mangle]
-pub extern "C" fn __cudaUnregisterFatBinary(_fatCubinHandle: MemPtr) {
+#[unsafe(no_mangle)]
+pub extern "C" fn __cudaUnregisterFatBinary(_fatCubinHandle: FatBinaryHandle) {
     // This is called when the client process exits, when the thread local storage is already dropped.
-    // Therefore, we implement this at the server side.
 }
 
-#[no_mangle]
-pub extern "C" fn __cudaRegisterFatBinaryEnd(_fatCubinHandle: MemPtr) {
+#[unsafe(no_mangle)]
+pub extern "C" fn __cudaRegisterFatBinaryEnd(_fatCubinHandle: FatBinaryHandle) {
     // TODO: no actual impact
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn __cudaRegisterFunction(
     fatCubinHandle: FatBinaryHandle,
     hostFun: HostPtr,
-    _deviceFun: *mut ::std::os::raw::c_char,
-    deviceName: *const ::std::os::raw::c_char,
-    _thread_limit: ::std::os::raw::c_int,
-    _tid: MemPtr,
-    _bid: MemPtr,
-    _bDim: MemPtr,
-    _gDim: MemPtr,
-    _wSize: MemPtr,
+    deviceFun: *mut c_char,
+    deviceName: *const c_char,
+    _thread_limit: c_int,
+    _tid: *mut uint3,
+    _bid: *mut uint3,
+    _bDim: *mut dim3,
+    _gDim: *mut dim3,
+    _wSize: *mut c_int,
 ) {
-    if cfg!(debug_assertions) && !std::ptr::eq(deviceName, _deviceFun) {
+    if cfg!(debug_assertions) && !ptr::eq(deviceName, deviceFun) {
         log::warn!(
             "deviceName: {:?}, deviceFun: {:?}",
-            unsafe { std::ffi::CStr::from_ptr(deviceName) },
-            unsafe { std::ffi::CStr::from_ptr(_deviceFun) },
+            unsafe { CStr::from_ptr(deviceName) },
+            unsafe { CStr::from_ptr(deviceFun) },
         );
     }
 
@@ -57,22 +61,22 @@ pub extern "C" fn __cudaRegisterFunction(
     runtime.lazy_functions.entry(hostFun).or_insert((fatCubinHandle, deviceName));
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn __cudaRegisterVar(
     fatCubinHandle: FatBinaryHandle,
     hostVar: HostPtr,
-    _deviceAddress: *mut ::std::os::raw::c_char,
-    deviceName: *const ::std::os::raw::c_char,
-    _ext: ::std::os::raw::c_int,
+    deviceAddress: *mut c_char,
+    deviceName: *const c_char,
+    _ext: c_int,
     _size: usize,
-    _constant: ::std::os::raw::c_int,
-    _global: ::std::os::raw::c_int,
+    _constant: c_int,
+    _global: c_int,
 ) {
-    if cfg!(debug_assertions) && !std::ptr::eq(deviceName, _deviceAddress) {
+    if cfg!(debug_assertions) && !ptr::eq(deviceName, deviceAddress) {
         log::warn!(
             "deviceName: {:?}, deviceFun: {:?}",
-            unsafe { std::ffi::CStr::from_ptr(deviceName) },
-            unsafe { std::ffi::CStr::from_ptr(_deviceAddress) },
+            unsafe { CStr::from_ptr(deviceName) },
+            unsafe { CStr::from_ptr(deviceAddress) },
         );
     }
 

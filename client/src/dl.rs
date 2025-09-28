@@ -1,14 +1,14 @@
-#![expect(non_snake_case)]
-
-use std::cell::OnceCell;
 use std::ffi::*;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 use std::{env, mem};
 
 // original dlsym
-extern "C" {
+unsafe extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
+
+static DLOPEN_ORIG: LazyLock<extern "C" fn(*const c_char, c_int) -> *mut c_void> =
+    LazyLock::new(|| unsafe { mem::transmute(dlsym_next(c"dlopen")) });
 
 pub fn dlsym_next(symbol: &CStr) -> *mut c_void {
     const RTLD_NEXT: *mut c_void = usize::MAX as _;
@@ -19,11 +19,8 @@ pub fn dlsym_next(symbol: &CStr) -> *mut c_void {
     result
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void {
-    #[thread_local]
-    static DLOPEN: OnceCell<extern "C" fn(*const c_char, c_int) -> *mut c_void> = OnceCell::new();
-    let DLOPEN_ORIG = DLOPEN.get_or_init(|| unsafe { mem::transmute(dlsym_next(c"dlopen")) });
     // use the original dlopen to load the library
     if filename.is_null() {
         return DLOPEN_ORIG(filename, flags);

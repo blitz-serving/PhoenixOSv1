@@ -7,7 +7,6 @@ This is Rust bindings for the CUDA toolkit APIs. The bindings are generated usin
 The code is in `build.rs`. Logic:
 
 - Use `bindgen` to generate Rust bindings for the *raw* CUDA toolkit APIs.
-- Decorate the generated bindings for usability like being `Transportable` in `network`.
 - Split the bindings into separate parts (`types` and `funcs`) for client/server separating usage, `types` part is in `src/types.rs`, `funcs` part is in `src/lib.rs`, and raw bindings code are left in `src/bindings`.
 
 ## Usage

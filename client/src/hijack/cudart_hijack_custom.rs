@@ -4,7 +4,7 @@ use cudasys::types::cudart::*;
 use std::cell::RefCell;
 use std::ffi::*;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaMemcpy(
     dst: *mut c_void,
     src: *const c_void,
@@ -15,7 +15,7 @@ pub extern "C" fn cudaMemcpy(
     match kind {
         cudaMemcpyKind::cudaMemcpyHostToHost => unsafe {
             std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, count);
-            return cudaError_t::cudaSuccess;
+            cudaError_t::cudaSuccess
         },
         cudaMemcpyKind::cudaMemcpyHostToDevice => {
             super::cudart_hijack::cudaMemcpyHtod(dst, src.cast(), count, kind)
@@ -30,7 +30,7 @@ pub extern "C" fn cudaMemcpy(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaMemcpyAsync(
     dst: *mut c_void,
     src: *const c_void,
@@ -43,7 +43,7 @@ pub extern "C" fn cudaMemcpyAsync(
         cudaMemcpyKind::cudaMemcpyHostToHost => unsafe {
             super::cudart_hijack::cudaStreamSynchronize(stream);
             std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, count);
-            return cudaError_t::cudaSuccess;
+            cudaError_t::cudaSuccess
         },
         cudaMemcpyKind::cudaMemcpyHostToDevice => {
             super::cudart_hijack::cudaMemcpyAsyncHtod(dst, src.cast(), count, kind, stream)
@@ -59,11 +59,10 @@ pub extern "C" fn cudaMemcpyAsync(
 }
 
 fn get_cufunction(func: HostPtr) -> cudasys::cuda::CUfunction {
-    if !CLIENT_THREAD.with_borrow(|client| client.cuda_device_init) {
+    if !ClientThread::with_borrow(|client| client.cuda_device_init) {
         // https://docs.nvidia.com/cuda/cuda-c-programming-guide/#initialization
-        #[cfg(not(feature = "phos"))]
         assert_eq!(super::cudart_hijack::cudaFree(std::ptr::null_mut()), Default::default());
-        CLIENT_THREAD.with_borrow_mut(|client| client.cuda_device_init = true);
+        ClientThread::with_borrow_mut(|client| client.cuda_device_init = true);
     }
 
     if let Some(&cufunc) = RUNTIME_CACHE.read().unwrap().loaded_functions.get(&func) {
@@ -75,7 +74,7 @@ fn get_cufunction(func: HostPtr) -> cudasys::cuda::CUfunction {
     // TODO: In CUDA 12, use `cuLibrary{LoadData,GetKernel}` to avoid pinning device.
     if let Some(device) = runtime.cuda_device {
         assert_eq!(
-            CLIENT_THREAD.with_borrow(|client| client.cuda_device),
+            ClientThread::with_borrow(|client| client.cuda_device),
             Some(device),
             "current device (left) and registered device (right) mismatch",
         );
@@ -115,7 +114,7 @@ fn get_cufunction(func: HostPtr) -> cudasys::cuda::CUfunction {
     cufunc
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaLaunchKernel(
     func: HostPtr,
     gridDim: dim3,
@@ -145,7 +144,7 @@ pub extern "C" fn cudaLaunchKernel(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaHostAlloc(
     pHost: *mut *mut ::std::os::raw::c_void,
     size: usize,
@@ -162,7 +161,7 @@ pub extern "C" fn cudaHostAlloc(
     cudaError_t::cudaSuccess
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaGetErrorString(
     cudaError: cudaError_t,
 ) -> *const ::std::os::raw::c_char {
@@ -176,7 +175,7 @@ struct CallConfiguration {
     gridDim: dim3,
     blockDim: dim3,
     sharedMem: usize,
-    stream: MemPtr,
+    stream: usize,
 }
 
 thread_local! {
@@ -185,12 +184,12 @@ thread_local! {
     };
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn __cudaPushCallConfiguration(
     gridDim: dim3,
     blockDim: dim3,
     sharedMem: usize,
-    stream: MemPtr,
+    stream: usize,
 ) -> cudaError_t {
     CALL_CONFIGURATIONS.with_borrow_mut(|v| {
         v.push(CallConfiguration {
@@ -203,12 +202,12 @@ pub extern "C" fn __cudaPushCallConfiguration(
     cudaError_t::cudaSuccess
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn __cudaPopCallConfiguration(
     gridDim: *mut dim3,
     blockDim: *mut dim3,
     sharedMem: *mut usize,
-    stream: *mut MemPtr,
+    stream: *mut usize,
 ) -> cudaError_t {
     if let Some(config) = CALL_CONFIGURATIONS.with_borrow_mut(Vec::pop) {
         unsafe {
@@ -223,7 +222,7 @@ pub extern "C" fn __cudaPopCallConfiguration(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn cudaFuncGetAttributes(
     attr: *mut cudaFuncAttributes,
     func: HostPtr,
@@ -233,7 +232,7 @@ extern "C" fn cudaFuncGetAttributes(
     super::cudart_hijack::cudaFuncGetAttributesInternal(attr, func)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
     numBlocks: *mut c_int,
     func: HostPtr,
@@ -252,7 +251,7 @@ extern "C" fn cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
     unsafe { std::mem::transmute(result) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn cudaFuncSetAttribute(
     func: HostPtr,
     attr: cudaFuncAttribute,

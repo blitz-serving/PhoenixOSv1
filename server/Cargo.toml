@@ -15,14 +15,14 @@ log = { workspace = true }
 env_logger = { workspace = true }
 core_affinity = { workspace = true }
 libc = { workspace = true }
-socket2 = "0.5"
+socket2 = "0.6" # will be removed in favor of tarpc
 
 [build-dependencies]
 cudasys = { workspace = true }
 hookgen = { workspace = true }
 
 [features]
-# default = ["rdma"]
+default = ["phos"]
 rdma = ["network/rdma"]
 phos = []
 

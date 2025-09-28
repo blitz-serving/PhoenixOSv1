@@ -3,7 +3,6 @@ use std::os::raw::*;
 use cudasys::cuda::*;
 
 pub fn cu_launch_kernel(
-    #[cfg(feature = "phos")] pos_cuda_ws: &crate::phos::POSWorkspace_CUDA,
     f: CUfunction,
     gridDimX: c_uint,
     gridDimY: c_uint,
@@ -15,7 +14,6 @@ pub fn cu_launch_kernel(
     hStream: CUstream,
     args: &[u8],
 ) -> CUresult {
-    #[cfg(not(feature = "phos"))]
     unsafe {
         let args_len = args.len();
         let extra_array: [*mut c_void; 5] = [
@@ -39,44 +37,8 @@ pub fn cu_launch_kernel(
             extra_array.as_ptr().cast_mut(),
         )
     }
-    // https://github.com/SJTU-IPADS/PhoenixOS/blob/main/unittest/test_cuda/apis/cuda_driver/cuLaunchKernel.cpp
-    #[cfg(feature = "phos")]
-    {
-        use super::*;
-
-        CUresult::from_i32(pos_cuda_ws.pos_process(
-            918, // cuLaunchKernel
-            0,
-            &[
-                &raw const f as usize,
-                size_of_val(&f),
-                &raw const gridDimX as usize,
-                size_of_val(&gridDimX),
-                &raw const gridDimY as usize,
-                size_of_val(&gridDimY),
-                &raw const gridDimZ as usize,
-                size_of_val(&gridDimZ),
-                &raw const blockDimX as usize,
-                size_of_val(&blockDimX),
-                &raw const blockDimY as usize,
-                size_of_val(&blockDimY),
-                &raw const blockDimZ as usize,
-                size_of_val(&blockDimZ),
-                &raw const sharedMemBytes as usize,
-                size_of_val(&sharedMemBytes),
-                &raw const hStream as usize,
-                size_of_val(&hStream),
-                args.as_ptr() as usize,
-                args.len(),
-                1, // work around null check
-                0,
-            ],
-        ))
-        .expect("Illegal result ID")
-    }
 }
 
-#[cfg(not(feature = "phos"))]
 pub fn cu_func_get_attributes(
     attr: *mut cudasys::cudart::cudaFuncAttributes,
     func: CUfunction,

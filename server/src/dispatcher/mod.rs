@@ -1,12 +1,6 @@
 #![expect(non_snake_case)]
 
 use codegen::cuda_hook_exe;
-use log::error;
-use network::type_impl::{recv_slice, send_slice};
-use network::{CommChannel, Transportable};
-
-#[cfg(feature = "phos")]
-use cudasys::FromPrimitive as _;
 
 use crate::ServerWorker;
 
@@ -22,7 +16,8 @@ mod nccl_exe;
 
 include!("mod_exe.rs");
 
-pub fn dispatch<C: CommChannel>(proc_id: i32, server: &mut ServerWorker<C>) {
+pub fn dispatch(proc_id: i32, server: &mut ServerWorker) {
+    use log::error;
     // let start = network::NsTimestamp::now();
     #[deny(unreachable_patterns)]
     let func = dispatcher_match! { proc_id,
