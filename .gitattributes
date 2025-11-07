@@ -1,3 +1,3 @@
-/Dockerfile linguist-vendored
+/environment/Dockerfile linguist-vendored
 /rperf/libs/vanilla/** linguist-vendored
 /tests/** linguist-vendored

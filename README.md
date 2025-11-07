@@ -76,7 +76,7 @@ cd ..
 find -type f -executable -name "test_*" -exec ./startclient_debug.sh {} \;
 ```
 
-P.S. Can use `RUST_LOG` environment to control the log level (default=debug).
+P.S. Can use `RUST_LOG` environment to control the log level (default=info).
 
 
 ### Running applications with XPURemoting

@@ -1,0 +1,7 @@
+chain_width = 80
+# group_imports = "StdExternalCrate"
+imports_granularity = "Module"
+struct_lit_width = 80
+struct_variant_width = 80
+fn_call_width = 100
+single_line_let_else_max_width = 100
