@@ -46,7 +46,14 @@ fn cudaPeekAtLastError() -> cudaError_t;
 fn cudaStreamSynchronize(#[handle = "use"] stream: cudaStream_t) -> cudaError_t;
 
 #[cuda_hook(proc_id = 265)]
-fn cudaMalloc(devPtr: *mut *mut c_void, size: usize) -> cudaError_t;
+fn cudaMalloc(devPtr: *mut *mut c_void, size: usize) -> cudaError_t {
+    'server_execution: {
+        #[cfg(not(feature = "phos"))]
+        let hook_result = unsafe { cudaMalloc(devPtr__ptr, size) };
+        #[cfg(feature = "phos")]
+        let hook_result = crate::phos::memory::cuda_malloc(devPtr__ptr, size);
+    }
+}
 
 #[cuda_custom_hook] // calls one of the following internal APIs
 fn cudaMemcpy(
@@ -133,7 +140,14 @@ fn cudaMemcpyAsyncDtod(
 ) -> cudaError_t;
 
 #[cuda_hook(proc_id = 253, async_api)]
-fn cudaFree(#[device] devPtr: *mut c_void) -> cudaError_t;
+fn cudaFree(#[device] devPtr: *mut c_void) -> cudaError_t {
+    'server_execution: {
+        #[cfg(not(feature = "phos"))]
+        let hook_result = unsafe { cudaFree(devPtr) };
+        #[cfg(feature = "phos")]
+        let hook_result = crate::phos::memory::cuda_free(devPtr);
+    }
+}
 
 #[cuda_hook(proc_id = 175)]
 fn cudaStreamIsCapturing(

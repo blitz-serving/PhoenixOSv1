@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
-use std::io::{self, IoSlice, Write};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Default)]
 pub struct HandleManager(BTreeMap<usize, Handle>);
+
+struct Handle(usize);
 
 impl HandleManager {
     pub fn len(&self) -> usize {
@@ -11,24 +11,7 @@ impl HandleManager {
     }
 
     pub fn insert(&mut self, proxy: usize, value: usize) {
-        self.0.insert(
-            proxy,
-            Handle {
-                value,
-                #[cfg(feature = "phos")]
-                payloads: Vec::new(),
-            },
-        );
-    }
-
-    #[cfg(feature = "phos")]
-    pub fn insert_args(&mut self, proxy: usize, args: Vec<u8>) {
-        static TIMESTAMP: AtomicUsize = AtomicUsize::new(1);
-
-        self.0.get_mut(&proxy).unwrap().payloads.push(Payload {
-            timestamp: TIMESTAMP.fetch_add(1, Ordering::Relaxed),
-            args: args.into_boxed_slice(),
-        });
+        self.0.insert(proxy, Handle(value));
     }
 
     pub fn get<T>(&mut self, proxy: *mut T, is_destroy: bool) -> *mut T {
@@ -40,31 +23,9 @@ impl HandleManager {
             return 0;
         }
         if is_destroy {
-            self.0.remove(&proxy).unwrap().value
+            self.0.remove(&proxy).unwrap().0
         } else {
-            self.0.get(&proxy).unwrap().value
+            self.0.get(&proxy).unwrap().0
         }
     }
-
-    #[cfg(feature = "phos")]
-    pub fn serialize(&self, output: &mut impl Write) -> io::Result<()> {
-        let mut payloads: Vec<_> =
-            self.0.values().flat_map(|handle| handle.payloads.iter()).collect();
-        payloads.sort_unstable_by_key(|payload| payload.timestamp);
-        let mut bufs: Vec<_> =
-            payloads.into_iter().map(|payload| IoSlice::new(&payload.args)).collect();
-        output.write_all_vectored(bufs.as_mut_slice())
-    }
-}
-
-struct Handle {
-    value: usize,
-    #[cfg(feature = "phos")]
-    payloads: Vec<Payload>,
-}
-
-#[cfg(feature = "phos")]
-struct Payload {
-    timestamp: usize,
-    args: Box<[u8]>,
 }

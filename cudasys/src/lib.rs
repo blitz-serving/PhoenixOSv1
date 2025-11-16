@@ -1,4 +1,5 @@
 #![expect(non_snake_case)]
+#![feature(try_trait_v2)]
 
 // Type definitions extracted from the bindings.
 pub mod types;

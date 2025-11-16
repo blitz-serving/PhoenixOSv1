@@ -1,3 +1,8 @@
+pub mod handle;
+pub mod handle_demo;
+pub mod memory;
+pub mod memory_demo;
+
 use std::sync::atomic::Ordering;
 
 use network::ringbufferchannel::SHM_FLAG_WRITE_DISABLED;

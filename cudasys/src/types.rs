@@ -26,12 +26,55 @@ macro_rules! impl_is_error {
 }
 
 pub mod cuda {
+    use std::convert::Infallible;
+    use std::ops::{ControlFlow, FromResidual, Try};
+
     include!("bindings/types/cuda.rs");
 
     const _: () = assert!(CUDA_VERSION >= 11030);
 
     success_return_value!(CUresult::CUDA_SUCCESS);
     impl_is_error!(CUresult);
+
+    impl Try for CUresult {
+        type Output = ();
+        type Residual = Self;
+
+        #[inline]
+        fn from_output(_: ()) -> Self {
+            Self::CUDA_SUCCESS
+        }
+
+        #[inline]
+        fn branch(self) -> ControlFlow<Self, ()> {
+            match self {
+                Self::CUDA_SUCCESS => ControlFlow::Continue(()),
+                err => ControlFlow::Break(err),
+            }
+        }
+    }
+
+    impl FromResidual for CUresult {
+        #[inline]
+        fn from_residual(residual: Self) -> Self {
+            residual
+        }
+    }
+
+    impl<T> FromResidual<CUresult> for Result<T, CUresult> {
+        #[inline]
+        fn from_residual(residual: CUresult) -> Self {
+            Err(residual)
+        }
+    }
+
+    impl FromResidual<Result<Infallible, CUresult>> for CUresult {
+        #[inline]
+        fn from_residual(residual: Result<Infallible, CUresult>) -> Self {
+            let Err(err) = residual;
+            err
+        }
+    }
 
     impl CUpointer_attribute {
         pub fn data_size(&self) -> usize {
@@ -139,7 +182,7 @@ pub mod nvrtc {
 
 pub mod nccl {
     include!("bindings/types/nccl.rs");
-     
+
     const _: () = assert!(NCCL_VERSION_CODE >= 21602, "run `apt install libnccl2 libnccl-dev`");
 
     success_return_value!(ncclResult_t::ncclSuccess);

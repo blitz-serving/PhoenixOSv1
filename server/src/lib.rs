@@ -2,12 +2,15 @@
 #![feature(write_all_vectored)]
 
 mod dispatcher;
+#[cfg(not(feature = "phos"))]
 mod handle;
 
 #[cfg(feature = "phos")]
 mod phos;
 #[cfg(feature = "phos")]
 pub use phos::check_config;
+#[cfg(feature = "phos")]
+use phos::handle;
 
 use cudasys::cudart::{cudaError_t, cudaGetDeviceCount};
 use dispatcher::dispatch;
@@ -107,7 +110,8 @@ pub fn launch_server(
         let flag_ptr = server.channel_receiver.flag_ptr().unwrap();
     }
 
-    let mut state = HandleDemoState::Disabled;
+    let mut state = phos::handle_demo::HandleDemoState::Disabled;
+    let mut memory_demo = phos::memory_demo::MemoryDemo::start();
 
     loop {
         match receive_request(&mut server.channel_receiver) {
@@ -135,59 +139,8 @@ pub fn launch_server(
             }
         }
         state.reset_and_restore(&mut server);
+        memory_demo.reset_and_restore();
     }
 
     info!("server #{id} (client PID: {client_pid}) terminated");
-}
-
-enum HandleDemoState {
-    Disabled,
-    Counting(u32),
-    Restoring { channel_sender: Channel, channel_receiver: Channel },
-}
-
-impl HandleDemoState {
-    fn reset_and_restore(&mut self, server: &mut ServerWorker) {
-        if server.resources.len() <= 3 {
-            return;
-        }
-        match self {
-            HandleDemoState::Counting(50..) => {
-                log::info!("{}", server.resources.len());
-                let mut args = Vec::new();
-                log::info!("checkpointing handles...");
-                server.resources.serialize(&mut args).unwrap();
-                log::info!("resetting all handles...");
-                std::mem::take(&mut server.resources);
-                let restore_vec = network::restore::RestoreVec::new(args);
-                log::info!("start restoring...");
-                let channel_sender = std::mem::replace(
-                    &mut server.channel_sender,
-                    Channel::new(Box::new(network::restore::BlackHole)),
-                );
-                let channel_receiver = std::mem::replace(
-                    &mut server.channel_receiver,
-                    Channel::new(Box::new(restore_vec)),
-                );
-                *self = HandleDemoState::Restoring { channel_sender, channel_receiver };
-            }
-            HandleDemoState::Counting(n) => {
-                *n += 1;
-            }
-            _ => {}
-        }
-    }
-
-    fn finish_restore(&mut self, server: &mut ServerWorker) {
-        if let HandleDemoState::Restoring { .. } = self {
-            let HandleDemoState::Restoring { channel_sender, channel_receiver } =
-                std::mem::replace(self, HandleDemoState::Counting(0))
-            else {
-                unreachable!()
-            };
-            server.channel_sender = channel_sender;
-            server.channel_receiver = channel_receiver;
-            log::info!("restoring done");
-        }
-    }
 }
