@@ -1,25 +1,21 @@
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::ffi::{CStr, c_char, c_int, c_uint, c_void};
-use std::io::{Read as _, Write as _};
-use std::net::TcpStream;
-use std::sync::RwLock;
-use std::{process, thread};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, RwLock};
+use std::{env, process, thread};
 
 use cudasys::types::cuda::{CUfunction, CUmodule};
-#[cfg(feature = "rdma")]
-use network::ringbufferchannel::RDMAChannel;
-use network::ringbufferchannel::{EmulatorChannel, SHMChannel};
-use network::session::SendSession;
-use network::{Channel, tcp};
+use network::channel::{Receiver, Sender};
+use network::config::Config;
+use network::{channel, oob};
 
 use crate::elf::{FatBinaryHeader, KernelParamInfo};
 
 pub struct ClientThread {
     pub id: i32,
-    pub channel_sender: Channel,
-    pub channel_receiver: Channel,
+    pub channel_sender: Sender,
+    pub channel_receiver: Receiver,
     pub cuda_device: Option<c_int>,
     pub cuda_device_init: bool,
     pub cuda_pctx_flags: Option<c_uint>,
@@ -34,51 +30,51 @@ impl ClientThread {
     // receiver's name is stoc_channel_name.
     fn new() -> Self {
         log::info!("[{}:{}] client init", std::file!(), std::line!());
-        for (i, arg) in std::env::args().enumerate() {
+        for (i, arg) in env::args().enumerate() {
             log::info!("arg[{i}]: {arg}");
         }
-        for (key, value) in std::env::vars() {
+        for (key, value) in env::vars() {
             if key.starts_with("LD_") || key.starts_with("RUST_") {
                 log::info!("{key}: {value}");
             }
         }
-        let config = network::NetworkConfig::read_from_file();
-        let id = {
-            let mut stream = TcpStream::connect(&config.daemon_socket).unwrap();
-            stream.write_all(&process::id().to_be_bytes()).unwrap();
-            let mut buf = [0u8; 4];
-            stream.read_exact(&mut buf).unwrap();
-            i32::from_be_bytes(buf)
-        };
-        log::info!("[#{id}] PID = {}, {:?}", process::id(), thread::current().id());
-        let (channel_sender, channel_receiver) = match config.comm_type.as_str() {
-            "shm" => {
-                let (sender, receiver) = SHMChannel::new_client_with_id(&config, id).unwrap();
-                if config.emulator {
-                    (
-                        Channel::new(Box::new(EmulatorChannel::new(sender, &config))),
-                        Channel::new(Box::new(EmulatorChannel::new(receiver, &config))),
-                    )
-                } else {
-                    (Channel::new(Box::new(sender)), Channel::new(Box::new(receiver)))
+        let Config { common: config, client: client_config, .. } = Config::read_env();
+        log::info!("Using {:?}", config.checked_comm_type());
+        let id = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let oob = oob::connect(&client_config.network.daemon_socket).await;
+                oob.new_client_thread(
+                    oob::current_context(),
+                    oob::NewClientThreadRequest {
+                        pid: process::id(),
+                        job_name: client_config.job_name.clone(),
+                        cuda_visible_devices: env::var("CUDA_VISIBLE_DEVICES").unwrap_or_default(),
+                        config: config.clone(),
+                        is_phos: cfg!(feature = "phos"),
+                    },
+                )
+                .await
+            })
+            .unwrap();
+        log::info!("[#{id}] PID = {}, {:?}", process::id(), thread::current_id());
+        let (channel_sender, channel_receiver) =
+            channel::client(&config, &client_config.network, id);
+
+        CLIENT_THREAD_INIT.store(true, Ordering::Relaxed);
+        unsafe {
+            extern "C" fn atexit() {
+                match CLIENT_THREAD.lock() {
+                    Ok(mut client) => *client = None,
+                    Err(e) => *e.into_inner() = None,
                 }
             }
-            "tcp" => {
-                let (sender, receiver) = tcp::new_client(&config, id).unwrap();
-                (Channel::new(Box::new(sender)), Channel::new(Box::new(receiver)))
-            }
-            #[cfg(feature = "rdma")]
-            "rdma" => {
-                let (sender, receiver) = RDMAChannel::new_client(&config, id);
-                (Channel::new(Box::new(sender)), Channel::new(Box::new(receiver)))
-            }
-            &_ => panic!("Unsupported communication type in config"),
-        };
+            assert_eq!(0, libc::atexit(atexit));
 
-        CLIENT_THREAD_INIT.set(true);
-        unsafe {
             unsafe extern "C" fn atfork() {
-                assert!(!CLIENT_THREAD_INIT.get());
+                assert!(!CLIENT_THREAD_INIT.load(Ordering::Relaxed));
             }
             assert_eq!(0, libc::pthread_atfork(Some(atfork), None, None));
 
@@ -99,16 +95,19 @@ impl ClientThread {
             cuda_pctx_flags: None,
             opt_async_api: config.opt_async_api,
             opt_shadow_desc: config.opt_shadow_desc,
-            opt_local: config.opt_local,
+            opt_local: client_config.opt_local,
         }
     }
 
+    #[inline]
     pub fn with_borrow<F: FnOnce(&Self) -> R, R>(f: F) -> R {
-        CLIENT_THREAD.with_borrow(f)
+        Self::with_borrow_mut(|client| f(client))
     }
 
     pub fn with_borrow_mut<F: FnOnce(&mut Self) -> R, R>(f: F) -> R {
-        CLIENT_THREAD.with_borrow_mut(f)
+        let mut client = CLIENT_THREAD.lock().unwrap();
+        let client = client.get_or_insert_with(ClientThread::new);
+        f(client)
     }
 
     pub fn before_call(&mut self, name: &'static str) {
@@ -126,16 +125,13 @@ impl ClientThread {
 impl Drop for ClientThread {
     fn drop(&mut self) {
         let proc_id: i32 = -1;
-        let send_ctx = SendSession::begin(self.id, &self.channel_sender, "drop");
-        send_ctx.send(&proc_id, "proc_id");
-        send_ctx.finish();
+        self.channel_sender.send(&proc_id).unwrap();
+        self.channel_sender.flush().unwrap();
     }
 }
 
-thread_local! {
-    static CLIENT_THREAD: RefCell<ClientThread> = RefCell::new(ClientThread::new());
-    static CLIENT_THREAD_INIT: Cell<bool> = const { Cell::new(false) };
-}
+static CLIENT_THREAD: Mutex<Option<ClientThread>> = Mutex::new(None);
+static CLIENT_THREAD_INIT: AtomicBool = AtomicBool::new(false);
 
 pub static DRIVER_CACHE: RwLock<DriverCache> = RwLock::new(DriverCache::new());
 pub static RUNTIME_CACHE: RwLock<RuntimeCache> = RwLock::new(RuntimeCache::new());
@@ -162,16 +158,20 @@ impl DriverCache {
         } else {
             Cow::Owned(image.to_vec())
         };
-        assert!(self.images.insert(module, image).is_none());
+        if self.images.insert(module, image).is_some() {
+            log::warn!("Module {module:p} already exists in driver cache, overwritten");
+        }
     }
 
     pub fn insert_function(&mut self, hfunc: CUfunction, hmod: CUmodule, name: &CStr) {
         let image = self.images.get(&hmod).unwrap();
         let name = name.to_str().unwrap();
-        let params = if let Some(fatbin) = FatBinaryHeader::cast(image.as_ptr()) {
-            fatbin.find_kernel_params(name)
-        } else {
-            crate::elf::find_kernel_params(image, name)
+        let params = match FatBinaryHeader::cast(image.as_ptr()) {
+            Some(fatbin) => fatbin.find_kernel_params(name),
+            None => crate::elf::find_kernel_params(image, name),
+        };
+        let Some(params) = params else {
+            panic!("kernel not found: {name}");
         };
         assert!(self.function_params.insert(hfunc, params).is_none());
     }

@@ -1,3 +1,4 @@
+#![feature(current_thread_id)]
 #![feature(drop_guard)]
 #![feature(thread_local)]
 

@@ -1,3 +1,5 @@
+// Set VALIDATE_FAT_BINARY=1 to trigger a full validation.
+//
 // References:
 // https://github.com/n-eiling/cuda-fatbin-decompression and https://github.com/RWTH-ACS/cricket
 // https://github.com/jiegec/fatbinary
@@ -69,9 +71,8 @@ impl FatBinaryHeader {
         }
     }
 
-    pub fn find_kernel_params(&self, name: &str) -> Box<[KernelParamInfo]> {
-        let cubin = self.code_iter().next().unwrap();
-        find_kernel_params(&cubin, name)
+    pub fn find_kernel_params(&self, name: &str) -> Option<Box<[KernelParamInfo]>> {
+        self.code_iter().find_map(|cubin| find_kernel_params(&cubin, name))
     }
 }
 
@@ -145,7 +146,7 @@ const _: () = assert!(size_of::<CodeHeader>() == 0x40);
 
 impl CodeHeader {
     fn validate(&self) -> (CodeKind, bool) {
-        let bail = || panic!("invalid fatbin code header: {self:#x?}");
+        let bail = |i| panic!("invalid fatbin code header at check {i}: {self:#x?}");
         let Self {
             __unknown02: 0x101,
             __unknown0c: 0,
@@ -158,20 +159,24 @@ impl CodeHeader {
             ..
         } = self
         else {
-            bail()
+            bail(1)
         };
         let kind = match self {
-            Self { kind: 1, header_size: 0x48, options_offset: 0x40, .. } => CodeKind::Ptx,
-            Self { kind: 2, header_size: 0x40 | 0x48, options_offset: 0, .. } => CodeKind::Elf,
-            _ => bail(),
+            Self { kind: 1, .. } => CodeKind::Ptx,
+            Self { kind: 2, .. } => CodeKind::Elf,
+            _ => bail(2),
         };
         let is_compressed = match self {
-            Self { compressed_size: 0, flags: 0x11, decompressed_size: 0, .. } => false,
-            Self { compressed_size: 1.., flags: 0x2011, decompressed_size: 1.., .. } => true,
-            // flag 0x100000 is unknown
-            Self { compressed_size: 1.., flags: 0x102011, decompressed_size: 1.., .. } => true,
-            _ => bail(),
+            Self { compressed_size: 0, decompressed_size: 0, .. } => false, // flags: 0x11
+            Self { compressed_size: 1.., decompressed_size: 1.., .. } => true, // flags: 0x2011
+            _ => bail(3),
         };
+        let flags = self.flags;
+        debug_assert_eq!(is_compressed, flags & 0x2000 != 0);
+        if flags & !0x110207F != 0 {
+            // 0x1100000 are unknown flags
+            log::warn!("Unseen flags: {flags:#x}");
+        }
         (kind, is_compressed)
     }
 }
@@ -202,15 +207,13 @@ fn validate_cubin(cubin: &[u8]) {
     }
 }
 
-pub fn find_kernel_params(cubin: &[u8], name: &str) -> Box<[KernelParamInfo]> {
+pub fn find_kernel_params(cubin: &[u8], name: &str) -> Option<Box<[KernelParamInfo]>> {
     let file = ElfBytes::<NativeEndian>::minimal_parse(cubin).unwrap();
-    let Ok(Some(shdr)) = file.section_header_by_name(&[".nv.info.", name].concat()) else {
-        panic!("Failed to find section header");
+    let shdr = file.section_header_by_name(&[".nv.info.", name].concat()).unwrap()?;
+    let (section, None) = file.section_data(&shdr).unwrap() else {
+        panic!("Section is compressed");
     };
-    let Ok((section, None)) = file.section_data(&shdr) else {
-        panic!("Failed to read section or it is compressed");
-    };
-    parse_params(section)
+    Some(parse_params(section))
 }
 
 fn parse_params(nvinfo: &[u8]) -> Box<[KernelParamInfo]> {
@@ -255,7 +258,7 @@ fn parse_params(nvinfo: &[u8]) -> Box<[KernelParamInfo]> {
     let mut params = params.into_boxed_slice();
     params.sort_unstable_by_key(|param| param.ordinal);
     for (i, param) in params.iter().enumerate() {
-        debug_assert!(param.validate());
+        param.validate();
         assert_eq!(i, param.ordinal as usize, "{params:#x?}");
         assert_eq!(is_cbank, param.is_cbank());
         match params.get(i + 1) {
@@ -296,10 +299,32 @@ impl KernelParamInfo {
         self.__rest & (1 << 17) == 0
     }
 
-    fn validate(&self) -> bool {
-        let log_alignment = self.__rest & 0xff;
-        let space = (self.__rest >> 8) & 0x0f;
-        let cbank = (self.__rest >> 12) & 0x1f;
-        self.index == 0 && log_alignment == 0 && space == 0 && cbank == 0x1f
+    fn validate(&self) {
+        #[derive(Debug)]
+        #[expect(dead_code)]
+        struct Display {
+            index: u32,
+            ordinal: u16,
+            offset: u16,
+            size: u16,
+            is_cbank: bool,
+            log_alignment: u8,
+            space: u8,
+            cbank: u8,
+        }
+        let display = Display {
+            index: self.index,
+            ordinal: self.ordinal,
+            offset: self.offset,
+            size: self.size(),
+            is_cbank: self.is_cbank(),
+            log_alignment: (self.__rest & 0xff) as _,
+            space: ((self.__rest >> 8) & 0x0f) as _,
+            cbank: ((self.__rest >> 12) & 0x1f) as _,
+        };
+        let Display { index: 0, log_alignment: 0, space: 0 | 4 | 5, cbank: 0x1f, .. } = display else {
+            log::warn!("Unexpected parameter attributes: {display:x?}");
+            return;
+        };
     }
 }

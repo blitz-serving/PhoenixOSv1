@@ -2,11 +2,12 @@
 
 use codegen::cuda_hook_exe;
 
-use crate::ServerWorker;
+use crate::ServerThread;
 
 mod cuda_exe;
 mod cuda_exe_utils;
 mod cudart_exe;
+mod cudart_exe_utils;
 mod nvml_exe;
 mod cudnn_exe;
 mod cublas_exe;
@@ -16,7 +17,7 @@ mod nccl_exe;
 
 include!("mod_exe.rs");
 
-pub fn dispatch(proc_id: i32, server: &mut ServerWorker) {
+pub fn dispatch(proc_id: i32, server: &mut ServerThread) {
     use log::error;
     // let start = network::NsTimestamp::now();
     #[deny(unreachable_patterns)]

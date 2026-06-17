@@ -24,3 +24,5 @@ data
 *.nsys-rep
 
 /config.toml
+
+ckpt/

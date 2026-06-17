@@ -14,11 +14,22 @@ macro_rules! success_return_value {
     };
 }
 
+pub trait CheckError: Copy + std::fmt::Debug {
+    fn is_error(self) -> bool;
+}
+
+impl CheckError for usize {
+    #[inline(always)]
+    fn is_error(self) -> bool {
+        false
+    }
+}
+
 macro_rules! impl_is_error {
     ($ty:ident) => {
-        impl $ty {
+        impl crate::types::CheckError for $ty {
             #[inline(always)]
-            pub fn is_error(self) -> bool {
+            fn is_error(self) -> bool {
                 self != Self::default()
             }
         }
@@ -27,14 +38,19 @@ macro_rules! impl_is_error {
 
 pub mod cuda {
     use std::convert::Infallible;
-    use std::ops::{ControlFlow, FromResidual, Try};
+    use std::ops::{ControlFlow, FromResidual, Residual, Try};
 
     include!("bindings/types/cuda.rs");
 
     const _: () = assert!(CUDA_VERSION >= 11030);
 
     success_return_value!(CUresult::CUDA_SUCCESS);
-    impl_is_error!(CUresult);
+
+    impl crate::types::CheckError for CUresult {
+        fn is_error(self) -> bool {
+            !matches!(self, Self::CUDA_SUCCESS | Self::CUDA_ERROR_NOT_PERMITTED)
+        }
+    }
 
     impl Try for CUresult {
         type Output = ();
@@ -76,6 +92,10 @@ pub mod cuda {
         }
     }
 
+    impl Residual<()> for CUresult {
+        type TryType = Self;
+    }
+
     impl CUpointer_attribute {
         pub fn data_size(&self) -> usize {
             match self {
@@ -94,8 +114,8 @@ pub mod cudart {
 
     success_return_value!(cudaError_t::cudaSuccess);
 
-    impl cudaError_t {
-        pub fn is_error(self) -> bool {
+    impl crate::types::CheckError for cudaError_t {
+        fn is_error(self) -> bool {
             !matches!(
                 self,
                 Self::cudaSuccess

@@ -37,6 +37,10 @@ cp -r /etc/skel/. /path/to/docker_root
 
 - Note that we need Rust **nightly** toolchain to build the project, which is not installed in the docker image.
 
+Mirrors:
+- https://help.mirrors.cernet.edu.cn/rustup/
+- https://help.mirrors.cernet.edu.cn/crates.io-index
+
 ```shell
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain nightly
 . "$HOME/.cargo/env"

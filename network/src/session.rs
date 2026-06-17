@@ -1,18 +1,18 @@
 use std::ffi::{CStr, CString};
 use std::fmt::Debug;
-use std::mem::MaybeUninit;
 use std::slice;
 
 use log::trace;
 
-use crate::type_impl::{recv_slice, recv_slice_to, save, save_slice, send_slice};
-use crate::{Channel, CommChannel as _, Transportable};
+use crate::channel::{Receiver, Sender};
+use crate::type_impl::{save, save_slice};
+use crate::{CommChannelError, MemRead, MemWrite};
 
 // TODO: stats, emulator
 
 pub struct SendSession<'ch> {
     id: i32,
-    channel: &'ch Channel,
+    channel: &'ch mut Sender,
     func: &'static str,
 }
 
@@ -23,7 +23,7 @@ macro_rules! bail_send {
 }
 
 impl<'ch> SendSession<'ch> {
-    pub fn begin(id: i32, channel: &'ch Channel, func: &'static str) -> Self {
+    pub fn begin(id: i32, channel: &'ch mut Sender, func: &'static str) -> Self {
         Self { id, channel, func }
     }
 
@@ -33,17 +33,17 @@ impl<'ch> SendSession<'ch> {
         }
     }
 
-    pub fn send<T>(&self, data: &T, name: &'static str)
+    pub fn send<T>(&mut self, data: &T, name: &'static str)
     where
-        T: Transportable + Debug,
+        T: Copy + Debug,
     {
         trace!(target: self.func, "[#{}] (send) {name} = {data:?}", self.id);
-        data.send(self.channel).unwrap_or_else(bail_send!(name))
+        self.channel.send(data).unwrap_or_else(bail_send!(name))
     }
 
-    pub unsafe fn send_unaligned<T>(&self, data: *const T, name: &'static str)
+    pub unsafe fn send_unaligned<T>(&mut self, data: *const T, name: &'static str)
     where
-        T: Transportable + Debug,
+        T: Copy + Debug,
     {
         self.check_not_null(data, name);
         trace!(
@@ -52,10 +52,7 @@ impl<'ch> SendSession<'ch> {
             self.id,
             unsafe { data.read_unaligned() },
         );
-        // TODO: just send bytes with alignment
-        unsafe { data.read_unaligned() }
-            .send(self.channel)
-            .unwrap_or_else(bail_send!(name))
+        self.channel.send_unaligned(data).unwrap_or_else(bail_send!(name))
     }
 
     pub unsafe fn slice_from<'a, T>(
@@ -68,22 +65,28 @@ impl<'ch> SendSession<'ch> {
         unsafe { slice::from_raw_parts(data, len) }
     }
 
-    pub fn send_slice<T>(&self, data: &[T], name: &'static str)
+    pub fn send_slice<T>(&mut self, data: &[T], name: &'static str)
     where
         T: Copy,
     {
         trace!(target: self.func, "[#{}] (send) {name} = {data:p}[{}]", self.id, data.len());
-        send_slice(data, self.channel).unwrap_or_else(bail_send!(name))
+        self.channel.send_slice(data).unwrap_or_else(bail_send!(name))
     }
 
-    pub fn send_cstr(&self, data: &CStr, name: &'static str) {
+    pub fn send_cstr(&mut self, data: &CStr, name: &'static str) {
         trace!(target: self.func, "[#{}] (send) {name} = {data:?}", self.id);
-        send_slice(data.to_bytes_with_nul(), self.channel).unwrap_or_else(bail_send!(name));
+        self.channel
+            .send_slice(data.to_bytes_with_nul())
+            .unwrap_or_else(bail_send!(name))
+    }
+
+    pub fn put_bytes(&mut self, mut src: impl MemRead) -> Result<(), CommChannelError> {
+        self.channel.put_bytes(&mut src)
     }
 
     #[inline]
     pub fn send_handle<T>(
-        &self,
+        &mut self,
         output: *mut *mut T,
         name: &'static str,
         next_proxy: fn() -> usize,
@@ -91,14 +94,18 @@ impl<'ch> SendSession<'ch> {
         self.send_handle_inner(output.cast(), name, next_proxy());
     }
 
-    fn send_handle_inner(&self, output: *mut usize, name: &'static str, proxy: usize) {
+    fn send_handle_inner(&mut self, output: *mut usize, name: &'static str, proxy: usize) {
         trace!(target: self.func, "[#{}] (send) {name} = {proxy:#x}", self.id);
-        proxy.send(self.channel).unwrap_or_else(bail_send!(name));
+        self.channel.send(&proxy).unwrap_or_else(bail_send!(name));
         unsafe { *output = proxy };
     }
 
     pub fn finish(self) {
-        match self.channel.flush_out() {
+        if let Sender::Emulator(channel) = self.channel {
+            let name = "timestamp";
+            channel.send_ts().unwrap_or_else(bail_send!(name))
+        }
+        match self.channel.flush() {
             Ok(()) => {}
             Err(e) => panic!("failed to flush_out: {}", e),
         }
@@ -107,7 +114,7 @@ impl<'ch> SendSession<'ch> {
 
 pub struct RecvSession<'ch> {
     pub id: i32,
-    pub channel: &'ch Channel,
+    pub channel: &'ch mut Receiver,
     pub func: &'static str,
     pub save: Option<Vec<u8>>,
 }
@@ -119,13 +126,13 @@ macro_rules! bail_recv {
 }
 
 impl<'ch> RecvSession<'ch> {
-    pub fn begin(id: i32, channel: &'ch Channel, func: &'static str) -> Self {
+    pub fn begin(id: i32, channel: &'ch mut Receiver, func: &'static str) -> Self {
         Self { id, channel, func, save: None }
     }
 
     pub fn begin_server(
         id: i32,
-        channel: &'ch Channel,
+        channel: &'ch mut Receiver,
         func: &'static str,
         save: bool,
         proc_id: i32,
@@ -149,11 +156,11 @@ impl<'ch> RecvSession<'ch> {
         unsafe { &mut *ptr }
     }
 
-    pub fn recv_mut<T>(&self, data: &mut T, name: &'static str)
+    pub fn recv_mut<T>(&mut self, data: &mut T, name: &'static str)
     where
-        T: Transportable + Debug,
+        T: Copy + Debug,
     {
-        data.recv(self.channel).unwrap_or_else(bail_recv!(name));
+        self.channel.recv_to(data).unwrap_or_else(bail_recv!(name));
         trace!(target: self.func, "[#{}] (recv) {name} = {data:?}", self.id);
         assert!(self.save.is_none());
     }
@@ -168,11 +175,11 @@ impl<'ch> RecvSession<'ch> {
         unsafe { slice::from_raw_parts_mut(data, len) }
     }
 
-    pub fn recv_mut_slice<T>(&self, data: &mut [T], name: &'static str)
+    pub fn recv_mut_slice<T>(&mut self, data: &mut [T], name: &'static str)
     where
         T: Copy,
     {
-        recv_slice_to(data, self.channel).unwrap_or_else(bail_recv!(name));
+        self.channel.recv_slice_to(data).unwrap_or_else(bail_recv!(name));
         trace!(target: self.func, "[#{}] (recv) {name} = {data:p}[{}]", self.id, data.len());
         assert!(self.save.is_none());
     }
@@ -182,9 +189,7 @@ impl<'ch> RecvSession<'ch> {
         T: Copy + Debug,
     {
         // TODO: extract from stream directly
-        let mut data = MaybeUninit::uninit();
-        data.recv(self.channel).unwrap_or_else(bail_recv!(name));
-        let data = unsafe { data.assume_init() };
+        let data = self.channel.recv().unwrap_or_else(bail_recv!(name));
         trace!(target: self.func, "[#{}] (recv) {name} = {data:?}", self.id);
         if let Some(output) = &mut self.save {
             save(&data, output);
@@ -196,7 +201,7 @@ impl<'ch> RecvSession<'ch> {
     where
         T: Copy,
     {
-        let data = recv_slice(self.channel).unwrap_or_else(bail_recv!(name));
+        let data = self.channel.recv_slice().unwrap_or_else(bail_recv!(name));
         trace!(target: self.func, "[#{}] (recv) {name} = {data:p}[{}]", self.id, data.len());
         if let Some(output) = &mut self.save {
             save_slice(&data, output);
@@ -205,7 +210,7 @@ impl<'ch> RecvSession<'ch> {
     }
 
     pub fn recv_cstr(&mut self, name: &'static str) -> CString {
-        let bytes = recv_slice(self.channel).unwrap_or_else(bail_recv!(name));
+        let bytes = self.channel.recv_slice().unwrap_or_else(bail_recv!(name));
         let result = CString::from_vec_with_nul(bytes.into_vec()).unwrap();
         trace!(target: self.func, "[#{}] (recv) {name} = {result:?}", self.id);
         if let Some(output) = &mut self.save {
@@ -214,9 +219,16 @@ impl<'ch> RecvSession<'ch> {
         result
     }
 
+    pub fn get_bytes(&mut self, mut dst: impl MemWrite) -> Result<(), CommChannelError> {
+        assert!(self.save.is_none());
+        self.channel.get_bytes(&mut dst)
+    }
+
     pub fn finish(self) -> Option<Vec<u8>> {
-        let name = "timestamp";
-        self.channel.recv_ts().unwrap_or_else(bail_recv!(name));
+        if let Receiver::Emulator(channel) = self.channel {
+            let name = "timestamp";
+            channel.recv_ts().unwrap_or_else(bail_recv!(name))
+        }
         self.save
     }
 }

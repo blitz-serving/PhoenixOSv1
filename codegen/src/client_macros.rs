@@ -11,7 +11,7 @@ pub fn hijack(input: &HookFn) -> TokenStream {
     let send_statements = params.iter().map(|param| {
         let Param { name, name_str, .. } = param;
         match &param.kind {
-            InputValue | InputHandle(_) | DeviceInputPtr | DeviceOutputPtr => {
+            InputValue | InputHandle { .. } | DeviceInputPtr | DeviceOutputPtr => {
                 quote! { send_ctx.send(&#name, #name_str); }
             }
             InputSinglePtr if param.is_hacked_type() => {
@@ -37,7 +37,7 @@ pub fn hijack(input: &HookFn) -> TokenStream {
                     send_ctx.send_cstr(#name, #name_str);
                 }
             }
-            OutputHandle => {
+            OutputHandle { .. } => {
                 quote! {
                     if client.opt_shadow_desc {
                         send_ctx.send_handle(#name, #name_str, next_handle);
@@ -54,7 +54,7 @@ pub fn hijack(input: &HookFn) -> TokenStream {
     let recv_statements = params.iter().filter(|p| p.is_host_output()).map(|param| {
         let Param { name, name_str, .. } = param;
         match &param.kind {
-            OutputHandle | OutputSinglePtr => {
+            OutputHandle { .. } | OutputSinglePtr => {
                 quote! {
                     // FIXME: allocate space for null pointers
                     let #name = unsafe { recv_ctx.mut_from(#name, #name_str) };
@@ -86,6 +86,7 @@ pub fn hijack(input: &HookFn) -> TokenStream {
 
     let client_before_send = input.injections.client_before_send.iter();
     let client_extra_send = input.injections.client_extra_send.iter();
+    let client_initial_recv = input.injections.client_initial_recv.iter();
     let client_after_recv = input.injections.client_after_recv.iter();
 
     let modifiers = match input.parent {
@@ -104,9 +105,9 @@ pub fn hijack(input: &HookFn) -> TokenStream {
 
                 #( #client_before_send )*
 
-                let send_ctx = network::session::SendSession::begin(
+                let mut send_ctx = network::session::SendSession::begin(
                     client.id,
-                    &client.channel_sender,
+                    &mut client.channel_sender,
                     #func_str,
                 );
 
@@ -129,14 +130,15 @@ pub fn hijack(input: &HookFn) -> TokenStream {
 
                 let mut recv_ctx = network::session::RecvSession::begin(
                     client.id,
-                    &client.channel_receiver,
+                    &mut client.channel_receiver,
                     #func_str,
                 );
 
+                #( #client_initial_recv )*
                 #( #recv_statements )*
                 let #result_name: #result_ty = recv_ctx.recv(stringify!(#result_name));
                 recv_ctx.finish();
-                if #result_name.is_error() {
+                if cudasys::types::CheckError::is_error(#result_name) {
                     log::error!(
                         target: #func_str,
                         "[#{}] returned error: {:?}\n{}",

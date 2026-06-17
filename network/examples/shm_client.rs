@@ -1,14 +1,14 @@
 fn main() {
     #[cfg(target_os = "linux")]
     {
-        use network::{ringbufferchannel::SHMChannel, Channel, type_impl::send_slice};
-        use std::boxed::Box;
+        use network::SendChannel;
+        use network::ringbufferchannel::SHMChannel;
 
         let shm_name = "/stoc";
         let shm_len = 1024;
-        let mut channel = Channel::new(Box::new(SHMChannel::new_client(shm_name, shm_len).unwrap()));
+        let mut channel = SHMChannel::new_client(shm_name, shm_len).unwrap();
         let buf = [1, 2, 3, 4, 5];
-        send_slice(&buf, &mut channel).unwrap();
+        channel.send_slice(&buf).unwrap();
 
         println!("send done");
     }

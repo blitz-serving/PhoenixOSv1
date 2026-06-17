@@ -3,14 +3,14 @@ use std::fs;
 use std::io::Write as _;
 use std::path::Path;
 
-use hookdef::{is_hacked_type, CustomHookAttrs, HookAttrs};
+use hookdef::{CustomHookAttrs, HookAttrs, is_hacked_type};
 use proc_macro2::{Span, TokenStream};
-use quote::{format_ident, ToTokens};
+use quote::{ToTokens, format_ident};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned as _;
 use syn::{
-    parse_quote, Attribute, Block, FnArg, ForeignItem, Ident, Item, ItemFn, Meta, Signature, Token,
-    Type, UseTree, Visibility,
+    Attribute, Block, FnArg, ForeignItem, Ident, Item, ItemFn, Meta, Signature, Token, Type,
+    UseTree, Visibility, parse_quote,
 };
 
 struct Hook {
@@ -26,6 +26,7 @@ pub fn generate_impls(
     output_suffix: &str,
     unimplement_suffix: Option<&str>,
     cuda_version: u8,
+    unimplement_body: fn(&Signature) -> Option<Box<Block>>,
 ) {
     let target_attr = match unimplement_suffix {
         Some(_) => "cuda_hook_hijack",
@@ -72,10 +73,7 @@ pub fn generate_impls(
                 vec![parse_quote! { #![allow(unused_variables)] }],
                 &imports[1..],
                 bindings,
-                |sig| {
-                    let name = sig.ident.to_string();
-                    Some(parse_quote!({ unimplemented!(#name) }))
-                },
+                unimplement_body,
             );
             if count != 0 && !mod_file.contains(&format!("mod {unimplement_mod};")) {
                 println!("cargo:warning=`mod {unimplement_mod};` is missing from `mod.rs`");
@@ -193,10 +191,10 @@ fn convert_hooks(
     for item in file.items {
         match item {
             Item::Use(ref use_item) => {
-                if let UseTree::Path(path) = &use_item.tree {
-                    if path.ident == "std" {
-                        output.push(item);
-                    }
+                if let UseTree::Path(path) = &use_item.tree
+                    && path.ident == "std"
+                {
+                    output.push(item);
                 }
             }
             Item::Type(mut item) => {
@@ -431,11 +429,7 @@ fn generate_bare_hooks(
             block,
         }));
     }
-    let output = prettyplease::unparse(&syn::File {
-        shebang: None,
-        attrs: file_attrs,
-        items,
-    });
+    let output = prettyplease::unparse(&syn::File { shebang: None, attrs: file_attrs, items });
     let mut file = fs::File::create(output_path).unwrap();
     file.write_all(comment.as_bytes()).unwrap();
     file.write_all(output.as_bytes()).unwrap();

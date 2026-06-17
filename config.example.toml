@@ -1,19 +1,13 @@
+[common]
 # transport method (shm, tcp, rdma)
 comm_type = "shm"
 
-# listener socket for rdma handshake and tcp connection
-# server thread #N will listen on <port> + N
-receiver_socket = "127.0.0.1:8002"
-device_name = "mlx5_1"
-device_port = 1
-
 # channel name for server and client to find each other, the name strings are not matter
-daemon_socket = "127.0.0.1:8001"
 stoc_channel_name = "/stoc"
 ctos_channel_name = "/ctos"
 
 # buffer size
-buf_size = 4000000000
+buf_size = 2000000000
 
 # network configuration
 # bandwidth is in bps, rtt is in ms 
@@ -22,6 +16,23 @@ rtt = 0.0
 bandwidth = 77491947438.08
 
 # optimizations
-opt_async_api = false
-opt_shadow_desc = false
-opt_local = false
+opt_async_api = true
+opt_shadow_desc = true
+
+[client]
+opt_local = true
+job_name = "default"
+
+[client.network]
+daemon_socket = "127.0.0.1:8001"
+# listener socket for rdma handshake and tcp connection
+# server thread #N will listen on <port> + N
+handshake_socket = "127.0.0.1:8002"
+device_name = "mlx5_1"
+device_port = 1
+
+[server.network]
+daemon_socket = "127.0.0.1:8001"
+handshake_socket = "127.0.0.1:8002"
+device_name = "mlx5_1"
+device_port = 1

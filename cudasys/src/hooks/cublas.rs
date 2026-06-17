@@ -1,25 +1,29 @@
-use crate::types::cublas::*;
-use codegen::cuda_hook;
 use std::os::raw::*;
+
+use codegen::cuda_hook;
+
+use crate::types::cublas::*;
 
 /// FIXME: void pointer hacking
 type HackedAssumeFloat = f32;
 
 #[cuda_hook(proc_id = 1100)]
-fn cublasCreate_v2(#[handle = "create"] handle: *mut cublasHandle_t) -> cublasStatus_t;
+fn cublasCreate_v2(
+    #[handle(op = "create", op_key = proc_id as u64)] handle: *mut cublasHandle_t,
+) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1101)]
 fn cublasDestroy_v2(#[handle = "destroy"] handle: cublasHandle_t) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1104, async_api)]
 fn cublasSetStream_v2(
-    #[handle = "modify"] handle: cublasHandle_t,
+    #[handle(op = "modify", op_key = proc_id as u64)] handle: cublasHandle_t,
     #[handle = "use"] streamId: cudaStream_t,
 ) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1119, async_api)]
 fn cublasSetMathMode(
-    #[handle = "modify"] handle: cublasHandle_t,
+    #[handle(op = "modify", op_key = proc_id as u64)] handle: cublasHandle_t,
     mode: cublasMath_t,
 ) -> cublasStatus_t;
 
@@ -121,7 +125,7 @@ fn cublasGemmStridedBatchedEx(
 
 #[cuda_hook(proc_id = 1105)]
 fn cublasSetWorkspace_v2(
-    #[handle = "modify"] handle: cublasHandle_t,
+    #[handle(op = "modify", op_key = proc_id as u64)] handle: cublasHandle_t,
     #[device] workspace: *mut c_void,
     workspaceSizeInBytes: usize,
 ) -> cublasStatus_t;

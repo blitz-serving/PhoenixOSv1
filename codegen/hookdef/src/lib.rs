@@ -3,7 +3,7 @@
 //! This is a separate crate because we can't export normal items in a proc-macro crate.
 
 use proc_macro2::{Ident, TokenStream};
-use quote::{quote, TokenStreamExt as _};
+use quote::{TokenStreamExt as _, quote};
 use syn::meta::{self, ParseNestedMeta};
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::spanned::Spanned as _;
@@ -135,18 +135,25 @@ pub struct HookFnItem {
 pub struct HookInjections {
     pub client_before_send: Vec<Stmt>,
     pub client_extra_send: Vec<Stmt>,
+    pub client_initial_recv: Vec<Stmt>,
     pub client_after_recv: Vec<Stmt>,
     pub server_extra_recv: Vec<Stmt>,
     pub server_before_execution: Vec<Stmt>,
     pub server_execution: Vec<Stmt>,
+    pub server_execution_phos: Vec<Stmt>,
+    pub server_initial_send: Vec<Stmt>,
     pub server_after_send: Vec<Stmt>,
 }
 
 impl HookInjections {
     pub fn stmt_after_async_api_return(&self) -> Option<&Stmt> {
-        [&self.client_after_recv, &self.server_after_send]
-            .iter()
-            .find_map(|s| s.first())
+        [
+            &self.client_after_recv,
+            &self.server_initial_send,
+            &self.server_after_send,
+        ]
+        .iter()
+        .find_map(|s| s.first())
     }
 }
 
@@ -175,18 +182,27 @@ impl Parse for HookFnItem {
             match label.name.ident.to_string().as_str() {
                 "client_before_send" => injections.client_before_send = block.stmts,
                 "client_extra_send" => injections.client_extra_send = block.stmts,
+                "client_initial_recv" => injections.client_initial_recv = block.stmts,
                 "client_after_recv" => injections.client_after_recv = block.stmts,
                 "server_extra_recv" => injections.server_extra_recv = block.stmts,
                 "server_before_execution" => injections.server_before_execution = block.stmts,
                 "server_execution" => injections.server_execution = block.stmts,
+                "server_execution_phos" => injections.server_execution_phos = block.stmts,
+                "server_initial_send" => injections.server_initial_send = block.stmts,
                 "server_after_send" => injections.server_after_send = block.stmts,
                 _ => {
                     return Err(Error::new_spanned(
                         label.name.ident,
                         "unsupported injection section",
-                    ))
+                    ));
                 }
             }
+        }
+        if !injections.server_execution.is_empty() && !injections.server_execution_phos.is_empty() {
+            return Err(Error::new_spanned(
+                injections.server_execution_phos.first().unwrap(),
+                "cannot have both server_execution and server_execution_phos sections",
+            ));
         }
         Ok(Self { sig, injections })
     }
@@ -227,10 +243,10 @@ pub fn is_hacked_type(mut ty: &Type) -> bool {
 }
 
 pub fn last_seg(ty: &Type) -> Option<&Ident> {
-    if let Type::Path(ty) = ty {
-        if let Some(seg) = ty.path.segments.last() {
-            return Some(&seg.ident);
-        }
+    if let Type::Path(ty) = ty
+        && let Some(seg) = ty.path.segments.last()
+    {
+        return Some(&seg.ident);
     }
     None
 }

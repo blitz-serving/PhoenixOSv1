@@ -1,6 +1,8 @@
-use crate::types::cudart::*;
-use codegen::{cuda_custom_hook, cuda_hook};
 use std::os::raw::*;
+
+use codegen::{cuda_custom_hook, cuda_hook};
+
+use crate::types::cudart::*;
 
 // Hacked via type alias because imports are rewritten in generated code.
 type CUfunction = crate::types::cuda::CUfunction;
@@ -47,10 +49,7 @@ fn cudaStreamSynchronize(#[handle = "use"] stream: cudaStream_t) -> cudaError_t;
 
 #[cuda_hook(proc_id = 265)]
 fn cudaMalloc(devPtr: *mut *mut c_void, size: usize) -> cudaError_t {
-    'server_execution: {
-        #[cfg(not(feature = "phos"))]
-        let hook_result = unsafe { cudaMalloc(devPtr__ptr, size) };
-        #[cfg(feature = "phos")]
+    'server_execution_phos: {
         let hook_result = crate::phos::memory::cuda_malloc(devPtr__ptr, size);
     }
 }
@@ -61,22 +60,6 @@ fn cudaMemcpy(
     src: *const c_void,
     count: usize,
     kind: cudaMemcpyKind,
-) -> cudaError_t;
-
-#[cuda_hook(proc_id = 320, async_api, parent = cudaMemcpy)]
-fn cudaMemcpyHtod(
-    #[device] dst: *mut c_void,
-    #[host(len = count)] src: *const c_void,
-    count: usize,
-    #[value = cudaMemcpyKind::cudaMemcpyHostToDevice] kind: cudaMemcpyKind,
-) -> cudaError_t;
-
-#[cuda_hook(proc_id = 321, parent = cudaMemcpy)]
-fn cudaMemcpyDtoh(
-    #[host(output, len = count)] dst: *mut c_void,
-    #[device] src: *const c_void,
-    count: usize,
-    #[value = cudaMemcpyKind::cudaMemcpyDeviceToHost] kind: cudaMemcpyKind,
 ) -> cudaError_t;
 
 #[cuda_hook(proc_id = 322, async_api, parent = cudaMemcpy)]
@@ -99,34 +82,97 @@ fn cudaMemcpyAsync(
 #[cuda_hook(proc_id = 323, async_api, parent = cudaMemcpyAsync)]
 fn cudaMemcpyAsyncHtod(
     #[device] dst: *mut c_void,
-    #[host(len = count)] src: *const c_void,
+    #[skip] src: *const c_void,
     count: usize,
     #[value = cudaMemcpyKind::cudaMemcpyHostToDevice] kind: cudaMemcpyKind,
     #[handle = "use"] stream: cudaStream_t,
 ) -> cudaError_t {
+    'client_extra_send: {
+        let src = unsafe { send_ctx.slice_from(src.cast::<u8>(), count, "src") };
+        match send_ctx.put_bytes(src) {
+            Ok(()) => (),
+            Err(network::CommChannelError::InvalidOperation) => send_ctx.send_slice(src, "src"),
+            Err(e) => panic!("failed to send src: {e}"),
+        }
+    }
+    'server_extra_recv: {
+        let direct_dst = cudart_exe_utils::Htod { dst: dst.cast(), len: count, stream };
+        let src = match recv_ctx.get_bytes(direct_dst) {
+            Ok(()) => None,
+            Err(network::CommChannelError::InvalidOperation) => {
+                Some(recv_ctx.recv_slice::<u8>("src"))
+            }
+            Err(e) => panic!("failed to receive src: {e}"),
+        };
+    }
     'server_execution: {
-        // FIXME: can't async because server deallocates memory after calling
-        let hook_result = unsafe {
-            assert_eq!(cudaStreamSynchronize(stream), Default::default());
-            cudaMemcpy(dst, src__ptr.cast(), count, cudaMemcpyKind::cudaMemcpyHostToDevice)
+        let hook_result = match src {
+            None => cudaError_t::cudaSuccess,
+            Some(src) => {
+                let status = unsafe {
+                    cudaMemcpyAsync(
+                        dst,
+                        src.as_ptr().cast(),
+                        count,
+                        cudaMemcpyKind::cudaMemcpyHostToDevice,
+                        stream,
+                    )
+                };
+                if status == cudaError_t::cudaSuccess {
+                    unsafe { cudaStreamSynchronize(stream) }
+                } else {
+                    status
+                }
+            }
         };
     }
 }
 
 #[cuda_hook(proc_id = 324, parent = cudaMemcpyAsync)]
 fn cudaMemcpyAsyncDtoh(
-    #[host(output, len = count)] dst: *mut c_void,
+    #[skip] dst: *mut c_void,
     #[device] src: *const c_void,
     count: usize,
     #[value = cudaMemcpyKind::cudaMemcpyDeviceToHost] kind: cudaMemcpyKind,
     #[handle = "use"] stream: cudaStream_t,
 ) -> cudaError_t {
     'server_execution: {
-        // FIXME: can't async because server can't send data back async
-        let hook_result = unsafe {
-            assert_eq!(cudaStreamSynchronize(stream), Default::default());
-            cudaMemcpy(dst__ptr.cast(), src, count, cudaMemcpyKind::cudaMemcpyDeviceToHost)
+        let direct_src = cudart_exe_utils::Dtoh { src: src.cast(), len: count, stream };
+        let (dst, hook_result) = match send_ctx.put_bytes(direct_src) {
+            Ok(()) => (None, cudaError_t::cudaSuccess),
+            Err(network::CommChannelError::InvalidOperation) => {
+                let mut dst = Box::<[u8]>::new_uninit_slice(count);
+                let status = unsafe {
+                    cudaMemcpyAsync(
+                        dst.as_mut_ptr().cast(),
+                        src,
+                        count,
+                        cudaMemcpyKind::cudaMemcpyDeviceToHost,
+                        stream,
+                    )
+                };
+                let hook_result = if status == cudaError_t::cudaSuccess {
+                    unsafe { cudaStreamSynchronize(stream) }
+                } else {
+                    status
+                };
+                (Some(unsafe { dst.assume_init() }), hook_result)
+            }
+            Err(e) => panic!("failed to send dst: {e}"),
         };
+    }
+    'server_initial_send: {
+        if let Some(dst) = &dst {
+            send_ctx.send_slice(dst, "dst");
+        }
+    }
+    'client_initial_recv: {
+        let dst = unsafe { recv_ctx.mut_slice_from(dst.cast::<u8>(), count, "dst") };
+        match recv_ctx.get_bytes(&mut *dst) {
+            Ok(()) => (),
+            Err(network::CommChannelError::InvalidOperation) => recv_ctx.recv_mut_slice(dst, "dst"),
+            Err(e) => panic!("failed to receive dst: {e}"),
+        }
     }
 }
 
@@ -141,10 +187,7 @@ fn cudaMemcpyAsyncDtod(
 
 #[cuda_hook(proc_id = 253, async_api)]
 fn cudaFree(#[device] devPtr: *mut c_void) -> cudaError_t {
-    'server_execution: {
-        #[cfg(not(feature = "phos"))]
-        let hook_result = unsafe { cudaFree(devPtr) };
-        #[cfg(feature = "phos")]
+    'server_execution_phos: {
         let hook_result = crate::phos::memory::cuda_free(devPtr);
     }
 }
@@ -160,6 +203,9 @@ fn cudaStreamIsCapturing(
 // to prevent reading or writing past the end of allocated memory when sending or receiving data.
 #[cuda_hook(proc_id = 123, max_cuda_version = 11)]
 fn cudaGetDeviceProperties(prop: *mut cudaDeviceProp, device: c_int) -> cudaError_t;
+
+#[cuda_hook(proc_id = 999123, min_cuda_version = 12, max_cuda_version = 12)]
+fn cudaGetDeviceProperties_v2(prop: *mut cudaDeviceProp, device: c_int) -> cudaError_t;
 
 #[cuda_hook(proc_id = 123, min_cuda_version = 13)]
 fn cudaGetDeviceProperties(prop: *mut cudaDeviceProp, device: c_int) -> cudaError_t;
@@ -246,6 +292,9 @@ fn cudaMemsetAsync(
     #[handle = "use"] stream: cudaStream_t,
 ) -> cudaError_t;
 
+#[cuda_custom_hook]
+fn cudaGetErrorName(error: cudaError_t) -> *const c_char;
+
 #[cuda_custom_hook] // local
 fn cudaGetErrorString(error: cudaError_t) -> *const c_char;
 
@@ -268,9 +317,6 @@ fn __cudaPopCallConfiguration(
     stream: *mut c_void,
 ) -> cudaError_t;
 
-#[cuda_hook(proc_id = 999123, min_cuda_version = 12, max_cuda_version = 12)]
-fn cudaGetDeviceProperties_v2(prop: *mut cudaDeviceProp, device: c_int) -> cudaError_t;
-
 #[cuda_hook(proc_id = 167)]
 fn cudaStreamCreateWithPriority(
     #[handle = "create"] pStream: *mut cudaStream_t,
@@ -280,15 +326,26 @@ fn cudaStreamCreateWithPriority(
 
 #[cuda_hook(proc_id = 201)]
 fn cudaEventCreateWithFlags(
-    #[handle = "create"] event: *mut cudaEvent_t,
+    #[handle(op = "create", op_key = proc_id as u64)] event: *mut cudaEvent_t,
     flags: c_uint,
 ) -> cudaError_t;
 
 #[cuda_hook(proc_id = 205)]
 fn cudaEventRecord(
-    #[handle = "modify"] event: cudaEvent_t,
+    #[handle(op = "modify", op_key = proc_id as u64)] event: cudaEvent_t,
     #[handle = "use"] stream: cudaStream_t,
 ) -> cudaError_t;
+
+#[cuda_hook(proc_id = 206)]
+fn cudaEventRecordWithFlags(
+    // Uses the same op_key as `cudaEventRecord`.
+    #[handle(op = "modify", op_key = proc_id as u64 - 1)] event: cudaEvent_t,
+    #[handle = "use"] stream: cudaStream_t,
+    flags: c_uint,
+) -> cudaError_t;
+
+#[cuda_hook(proc_id = 207, async_api = false)]
+fn cudaEventSynchronize(#[handle = "use"] event: cudaEvent_t) -> cudaError_t;
 
 #[cuda_hook(proc_id = 180, async_api = false)]
 fn cudaStreamWaitEvent(
@@ -421,3 +478,6 @@ fn cudaGraphLaunch(
     graphExec: cudaGraphExec_t,
     #[handle = "use"] stream: cudaStream_t,
 ) -> cudaError_t;
+
+#[cuda_custom_hook] // local
+fn __cudaGetKernel(arg1: *mut cudaKernel_t, arg2: *const c_void) -> cudaError_t;

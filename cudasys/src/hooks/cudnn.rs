@@ -455,3 +455,6 @@ fn cudnnBackendSetAttribute(
     elementCount: i64,
     #[host(len = attributeType.data_size() * elementCount)] arrayOfElements: *const c_void,
 ) -> cudnnStatus_t;
+
+#[cuda_hook(proc_id = 1850)]
+fn cudnnGetVersion() -> usize;

@@ -4,13 +4,25 @@ use quote::{quote, quote_spanned};
 use syn::spanned::Spanned as _;
 use syn::{Expr, Type, TypePtr};
 
+pub fn is_handle_type_with_op_key(ty: &Type) -> bool {
+    let Some(ident) = last_seg(ty) else { return false };
+    matches!(
+        ident.to_string().as_str(),
+        "cublasHandle_t"
+            | "CUfunction"
+            | "cublasLtMatmulDesc_t"
+            | "cublasLtMatmulPreference_t"
+            | "cudaEvent_t"
+    )
+}
+
 pub fn is_handle_type(ty: &Type) -> bool {
     let Some(ident) = last_seg(ty) else { return false };
     matches!(
         ident.to_string().as_str(),
-        "CUcontext"
-            | "CUstream"
-            | "CUmodule"
+        "CUstream"
+            // | "CUcontext"
+            // | "CUmodule"
             | "CUfunction"
             | "cudaStream_t"
             | "cudaEvent_t"

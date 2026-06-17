@@ -1,6 +1,8 @@
-use crate::types::cublasLt::*;
-use codegen::cuda_hook;
 use std::os::raw::*;
+
+use codegen::cuda_hook;
+
+use crate::types::cublasLt::*;
 
 /// FIXME: void pointer hacking
 type HackedAssumeDouble = f64;
@@ -48,7 +50,7 @@ fn cublasLtMatmulAlgoGetHeuristic(
 
 #[cuda_hook(proc_id = 1519)]
 fn cublasLtMatmulDescCreate(
-    #[handle = "create"] matmulDesc: *mut cublasLtMatmulDesc_t,
+    #[handle(op = "create", op_key = proc_id as u64)] matmulDesc: *mut cublasLtMatmulDesc_t,
     computeType: cublasComputeType_t,
     scaleType: cudaDataType_t,
 ) -> cublasStatus_t;
@@ -60,7 +62,8 @@ fn cublasLtMatmulDescDestroy(
 
 #[cuda_hook(proc_id = 1523)]
 fn cublasLtMatmulDescSetAttribute(
-    #[handle = "modify"] matmulDesc: cublasLtMatmulDesc_t,
+    #[handle(op = "modify", op_key = (proc_id as u64) << 32 | (attr as u64))]
+    matmulDesc: cublasLtMatmulDesc_t,
     attr: cublasLtMatmulDescAttributes_t,
     #[host(len = sizeInBytes)] buf: *const c_void,
     sizeInBytes: usize,
@@ -72,7 +75,7 @@ fn cublasLtMatmulDescSetAttribute(
 
 #[cuda_hook(proc_id = 1524)]
 fn cublasLtMatmulPreferenceCreate(
-    #[handle = "create"] pref: *mut cublasLtMatmulPreference_t,
+    #[handle(op = "create", op_key = proc_id as u64)] pref: *mut cublasLtMatmulPreference_t,
 ) -> cublasStatus_t;
 
 #[cuda_hook(proc_id = 1526)]
@@ -82,7 +85,8 @@ fn cublasLtMatmulPreferenceDestroy(
 
 #[cuda_hook(proc_id = 1528)]
 fn cublasLtMatmulPreferenceSetAttribute(
-    #[handle = "modify"] pref: cublasLtMatmulPreference_t,
+    #[handle(op = "modify", op_key = (proc_id as u64) << 32 | (attr as u64))]
+    pref: cublasLtMatmulPreference_t,
     attr: cublasLtMatmulPreferenceAttributes_t,
     #[host(len = sizeInBytes)] buf: *const c_void,
     sizeInBytes: usize,

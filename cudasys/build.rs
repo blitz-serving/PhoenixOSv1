@@ -101,7 +101,7 @@ fn bind_gen(
             break;
         }
     }
-    let header_path = header_path.expect("Could not find CUDA header file");
+    let header_path = header_path.unwrap_or_else(|| panic!("Failed to find {library_header}"));
 
     // The bindgen::Builder is the main entry point to bindgen, and lets you build up options for
     // the resulting bindings.
@@ -111,7 +111,7 @@ fn bind_gen(
         // Add CargoCallbacks so build.rs is rerun on header changes
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         // The input header we would like to generate bindings for.
-        .header(header_path.to_str().unwrap());
+        .header(header_path.into_os_string().into_string().unwrap());
 
     // Whitelist types, functions, and variables
     for ty in allowlist_types {
@@ -226,7 +226,7 @@ fn main() {
 
     bind_gen(
         &cuda_paths,
-        "cublasLt.h",
+        "cublasLt_wrapper.h",
         "cublasLt",
         &["cublasLt.*"],
         &["cublasLt.*"],

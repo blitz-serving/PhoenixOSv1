@@ -2,16 +2,13 @@
 #include <cstring>
 
 #include "cuda_runtime.h"
-#include "cuda_profiler_api.h"
+// #include "cuda_profiler_api.h"
 
-// https://github.com/llvm/llvm-project/blob/main/clang/lib/Headers/__clang_cuda_runtime_wrapper.h
-
-extern "C" unsigned __cudaPushCallConfiguration(
-    dim3 gridDim,
-    dim3 blockDim,
-    size_t sharedMem = 0,
-    struct CUstream_st *stream = 0
-);
+#define __CUDA_INCLUDE_COMPILER_INTERNAL_HEADERS__
+#define __DEVICE_FUNCTIONS_HPP__
+#define __CUDACC__
+#include "crt/device_functions.h"  // some __cuda* functions
+#undef __CUDACC__
 
 #define __CUDA_INCLUDE_COMPILER_INTERNAL_HEADERS__
 #define __CUDA_INTERNAL_COMPILATION__

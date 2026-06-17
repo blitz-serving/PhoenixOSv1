@@ -38,3 +38,6 @@ fn nvmlDeviceGetP2PStatus(
     p2pIndex: nvmlGpuP2PCapsIndex_t,
     p2pStatus: *mut nvmlGpuP2PStatus_t,
 ) -> nvmlReturn_t;
+
+#[cuda_hook(proc_id = 991008)]
+fn nvmlDeviceGetMemoryInfo(device: nvmlDevice_t, memory: *mut nvmlMemory_t) -> nvmlReturn_t;

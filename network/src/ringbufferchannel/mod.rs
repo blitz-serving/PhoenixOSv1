@@ -1,9 +1,7 @@
-// pub mod channel;
-use crate::{
-    CommChannelInner, CommChannelError, CommChannelInnerIO,
-    RawMemory, RawMemoryMut
-};
 use std::ptr::{self, NonNull};
+use std::slice;
+
+use crate::{CommChannelError, CommChannelInner, CommChannelInnerIO, MemRead, MemWrite};
 
 pub mod test;
 
@@ -55,6 +53,14 @@ pub trait RingBufferManager: BufferManager {
     }
 
     #[inline]
+    #[expect(clippy::mut_from_ref)]
+    fn as_buffer(&self) -> &mut [u8] {
+        assert!(self.is_empty());
+        let buffer = unsafe { slice::from_raw_parts_mut(self.get_ptr(), self.get_len()) };
+        &mut buffer[META_AREA..]
+    }
+
+    #[inline]
     fn read_head_volatile(&self) -> usize {
         unsafe { ptr::read_volatile(self.get_ptr().add(HEAD_OFF) as *const usize) }
     }
@@ -74,7 +80,7 @@ pub trait RingBufferManager: BufferManager {
         unsafe { ptr::write_volatile(self.get_ptr().add(TAIL_OFF) as *mut usize, tail) }
     }
 
-    /// See [crate::Channel::flag_ptr] for writing operations.
+    /// TODO: See [crate::Channel::flag_ptr] for writing operations.
     #[inline]
     fn read_flag_volatile(&self) -> u64 {
         unsafe { ptr::read_volatile(self.get_ptr().add(FLAG_OFF).cast()) }
@@ -110,50 +116,46 @@ pub trait RingBufferManager: BufferManager {
     }
 
     #[inline]
-    fn num_adjacent_bytes_to_read(&self, cur_head: usize) -> usize {
+    fn contiguous_read_slice_from(&self, cur_head: usize, max_len: usize) -> &[u8] {
         let cur_tail = self.read_tail_volatile();
-        if cur_tail >= cur_head {
+        let contiguous_len = if cur_tail >= cur_head {
             cur_tail - cur_head
         } else {
             self.capacity() - cur_head
+        };
+        let len = std::cmp::min(contiguous_len, max_len);
+
+        unsafe {
+            let read_ptr = self.get_ptr().add(META_AREA + cur_head);
+            slice::from_raw_parts(read_ptr, len)
         }
     }
 
     #[inline]
-    fn num_adjacent_bytes_to_write(&self, cur_tail: usize) -> usize {
+    #[expect(clippy::mut_from_ref)]
+    fn contiguous_write_slice_from(&self, cur_tail: usize, max_len: usize) -> &mut [u8] {
         let mut cur_head = self.read_head_volatile();
         if cur_head == 0 {
             cur_head = self.capacity();
         }
 
-        if cur_tail >= cur_head {
+        let contiguous_len = if cur_tail >= cur_head {
             self.capacity() - cur_tail
         } else {
             cur_head - cur_tail - 1
+        };
+        let len = std::cmp::min(contiguous_len, max_len);
+
+        unsafe {
+            let write_ptr = self.get_ptr().add(META_AREA + cur_tail);
+            slice::from_raw_parts_mut(write_ptr, len)
         }
     }
 }
 
-pub trait RingBufferChannel: RingBufferManager {
-    unsafe fn read_at(&self, offset: usize, dst: *mut u8, len: usize) -> usize {
-        unsafe {
-            std::ptr::copy_nonoverlapping(self.get_ptr().add(offset), dst, len);
-        }
-        len
-    }
-
-    unsafe fn write_at(&self, offset: usize, src: *const u8, len: usize) -> usize {
-        unsafe {
-            std::ptr::copy_nonoverlapping(src, self.get_ptr().add(offset), len);
-        }
-        len
-    }
-}
-
-impl<T: RingBufferChannel + CommChannelInner> CommChannelInnerIO for T {
-    fn put_bytes(&self, src: &RawMemory) -> Result<usize, CommChannelError> {
-        let mut len = src.len;
-        let mut offset = 0;
+impl<T: RingBufferManager + CommChannelInner> CommChannelInnerIO for T {
+    fn put_bytes(&self, src: &mut impl MemRead) -> Result<(), CommChannelError> {
+        let mut len = src.remaining();
 
         while len > 0 {
             // current head and tail
@@ -166,55 +168,47 @@ impl<T: RingBufferChannel + CommChannelInner> CommChannelInnerIO for T {
                 self.flush_out()?;
             }
 
-            let current = std::cmp::min(self.num_adjacent_bytes_to_write(read_tail), len);
-
-            unsafe {
-                self.write_at(META_AREA + read_tail, src.ptr.add(offset), current);
-            }
+            let write_slice = self.contiguous_write_slice_from(read_tail, len);
+            let current = write_slice.len();
+            src.read(write_slice);
             std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
 
             self.write_tail_volatile((read_tail + current) % self.capacity());
-            offset += current;
             len -= current;
         }
 
-        Ok(offset)
+        Ok(())
     }
 
-    fn get_bytes(&self, dst: &mut RawMemoryMut) -> Result<usize, CommChannelError> {
+    fn get_bytes(&self, dst: &mut impl MemWrite) -> Result<(), CommChannelError> {
+        let total = dst.remaining();
         let mut cur_recv = 0;
-        while cur_recv != dst.len {
-            let mut new_dst = dst.add_offset(cur_recv);
-            let Ok(recv) = self.try_get_bytes(&mut new_dst) else { panic!() };
-            if recv == 0 && self.read_flag_volatile() == SHM_FLAG_WRITE_DISABLED & !SHM_FLAG_IN_USE {
+        while cur_recv != total {
+            let Ok(recv) = self.try_get_bytes(dst) else { panic!() };
+            if recv == 0 && self.read_flag_volatile() == SHM_FLAG_WRITE_DISABLED & !SHM_FLAG_IN_USE
+            {
                 assert_eq!(cur_recv, 0);
                 return Err(CommChannelError::ShmChannelLocked);
             }
             cur_recv += recv;
         }
-        Ok(cur_recv)
+        Ok(())
     }
 
-    fn try_put_bytes(&self, _src: &RawMemory) -> Result<usize, CommChannelError> {
-        unimplemented!()
-    }
-
-    fn try_get_bytes(&self, dst: &mut RawMemoryMut) -> Result<usize, CommChannelError> {
-        let mut len = dst.len;
-        let mut offset = 0;
+    fn try_get_bytes(&self, dst: &mut impl MemWrite) -> Result<usize, CommChannelError> {
+        let mut len = dst.remaining();
+        let mut recv = 0;
 
         while len > 0 {
             if self.is_empty() {
-                return Ok(offset);
+                return Ok(recv);
             }
 
             let read_head = self.read_head_volatile();
             assert!(read_head < self.capacity(), "read_head: {}", read_head);
-            let current = std::cmp::min(self.num_adjacent_bytes_to_read(read_head), len);
-
-            unsafe {
-                self.read_at(META_AREA + read_head, dst.ptr.add(offset), current);
-            }
+            let read_slice = self.contiguous_read_slice_from(read_head, len);
+            let current = read_slice.len();
+            dst.write(read_slice);
 
             std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
             assert!(
@@ -225,19 +219,11 @@ impl<T: RingBufferChannel + CommChannelInner> CommChannelInnerIO for T {
                 self.capacity()
             );
             self.write_head_volatile((read_head + current) % self.capacity());
-            offset += current;
+            recv += current;
             len -= current;
         }
 
-        Ok(offset)
-    }
-
-    fn safe_try_get_bytes(&self, dst: &mut crate::RawMemoryMut) -> Result<usize, CommChannelError> {
-        if self.num_bytes_stored() < dst.len {
-            Ok(0)
-        } else {
-            self.try_get_bytes(dst)
-        }
+        Ok(recv)
     }
 }
 
@@ -246,9 +232,6 @@ pub struct LocalChannel {
     ptr: *mut u8,
     size: usize,
 }
-
-unsafe impl Send for LocalChannel {}
-unsafe impl Sync for LocalChannel {}
 
 impl Drop for LocalChannel {
     fn drop(&mut self) {
@@ -282,8 +265,6 @@ impl BufferManager for LocalChannel {
 
 impl RingBufferManager for LocalChannel {}
 
-impl RingBufferChannel for LocalChannel {}
-
 impl CommChannelInner for LocalChannel {
     fn flush_out(&self) -> Result<(), CommChannelError> {
         while self.is_full() {
@@ -291,6 +272,26 @@ impl CommChannelInner for LocalChannel {
         }
         Ok(())
     }
+}
+
+impl<C: CommChannelInner> crate::SendChannel for C {
+    fn flush(&mut self) -> Result<(), CommChannelError> {
+        CommChannelInner::flush_out(self)
+    }
+
+    fn put_bytes(&mut self, mut src: &[u8]) -> Result<(), CommChannelError> {
+        CommChannelInnerIO::put_bytes(self, &mut src)
+    }
+
+    // TODO: optimize send()
+}
+
+impl<C: CommChannelInner> crate::RecvChannel for C {
+    fn get_bytes(&mut self, mut dst: &mut [u8]) -> Result<(), CommChannelError> {
+        CommChannelInnerIO::get_bytes(self, &mut dst)
+    }
+
+    // TODO: optimize recv()
 }
 
 #[cfg(test)]

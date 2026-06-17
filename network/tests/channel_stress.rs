@@ -1,14 +1,27 @@
-use network::{ringbufferchannel::LocalChannel, CommChannelInnerIO, RawMemory, RawMemoryMut};
-
+use std::cell::UnsafeCell;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
+use network::ringbufferchannel::LocalChannel;
+use network::{RecvChannel, SendChannel};
+
+pub struct Channel(UnsafeCell<LocalChannel>);
+
+impl Channel {
+    unsafe fn get(&self) -> &mut LocalChannel {
+        unsafe { &mut *self.0.get() }
+    }
+}
+
+unsafe impl Send for Channel {}
+unsafe impl Sync for Channel {}
+
 #[test]
 fn test_ring_buffer_producer_consumer() {
-    let channel = Arc::new(LocalChannel::new(
+    let channel = Arc::new(Channel(UnsafeCell::new(LocalChannel::new(
         1024 + network::ringbufferchannel::META_AREA,
-    ));
+    ))));
     let producer_channel = Arc::clone(&channel);
     let consumer_channel = Arc::clone(&channel);
 
@@ -24,8 +37,8 @@ fn test_ring_buffer_producer_consumer() {
 
         for i in 0..test_iters {
             let data = [(i % 256) as u8; 10]; // Simplified data to send
-            let send_memory = RawMemory::new(&data, data.len());
-            producer_channel.put_bytes(&send_memory).unwrap();
+            let producer_channel = unsafe { producer_channel.get() };
+            producer_channel.put_bytes(&data).unwrap();
         }
 
         println!("Producer done");
@@ -40,10 +53,10 @@ fn test_ring_buffer_producer_consumer() {
 
         while received < test_iters {
             let len = buffer.len();
-            let mut recv_memory = RawMemoryMut::new(&mut buffer, len);
-            match consumer_channel.get_bytes(&mut recv_memory) {
-                Ok(size) => {
-                    for i in 0..size {
+            let consumer_channel = unsafe { consumer_channel.get() };
+            match consumer_channel.get_bytes(&mut buffer) {
+                Ok(()) => {
+                    for i in 0..len {
                         assert_eq!(buffer[i], (received % 256) as u8);
                     }
 

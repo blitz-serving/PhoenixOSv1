@@ -1,32 +1,59 @@
 #![expect(non_snake_case)]
-use super::*;
-use cudasys::types::cudart::*;
 use std::cell::RefCell;
 use std::ffi::*;
+use std::{mem, ptr};
+
+use cudasys::types::cudart::*;
+
+use super::*;
+
+fn is_device_ptr(ptr: *const c_void) -> bool {
+    let mut attrs = mem::MaybeUninit::uninit();
+    let result = super::cudart_hijack::cudaPointerGetAttributes(attrs.as_mut_ptr(), ptr);
+    assert_eq!(result, cudaError_t::cudaSuccess);
+    match unsafe { attrs.assume_init() }.type_ {
+        cudaMemoryType::cudaMemoryTypeUnregistered | cudaMemoryType::cudaMemoryTypeHost => false,
+        cudaMemoryType::cudaMemoryTypeDevice => true,
+        cudaMemoryType::cudaMemoryTypeManaged => cuda_unimplemented("cudaMemoryTypeManaged"),
+    }
+}
+
+fn infer_memcpy_kind(dst: *const c_void, src: *const c_void) -> cudaMemcpyKind {
+    match (is_device_ptr(dst), is_device_ptr(src)) {
+        (false, false) => cudaMemcpyKind::cudaMemcpyHostToHost,
+        (true, false) => cudaMemcpyKind::cudaMemcpyHostToDevice,
+        (false, true) => cudaMemcpyKind::cudaMemcpyDeviceToHost,
+        (true, true) => cudaMemcpyKind::cudaMemcpyDeviceToDevice,
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn cudaMemcpy(
     dst: *mut c_void,
     src: *const c_void,
     count: usize,
-    kind: cudaMemcpyKind,
+    mut kind: cudaMemcpyKind,
 ) -> cudaError_t {
     log::debug!(target: "cudaMemcpy", "kind = {kind:?}");
+    if kind == cudaMemcpyKind::cudaMemcpyDefault {
+        kind = infer_memcpy_kind(dst, src);
+        log::debug!(target: "cudaMemcpy", "inferred kind = {kind:?}");
+    }
     match kind {
         cudaMemcpyKind::cudaMemcpyHostToHost => unsafe {
-            std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, count);
+            ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, count);
             cudaError_t::cudaSuccess
         },
         cudaMemcpyKind::cudaMemcpyHostToDevice => {
-            super::cudart_hijack::cudaMemcpyHtod(dst, src.cast(), count, kind)
+            super::cudart_hijack::cudaMemcpyAsyncHtod(dst, src.cast(), count, kind, ptr::null_mut())
         }
         cudaMemcpyKind::cudaMemcpyDeviceToHost => {
-            super::cudart_hijack::cudaMemcpyDtoh(dst.cast(), src, count, kind)
+            super::cudart_hijack::cudaMemcpyAsyncDtoh(dst.cast(), src, count, kind, ptr::null_mut())
         }
         cudaMemcpyKind::cudaMemcpyDeviceToDevice => {
             super::cudart_hijack::cudaMemcpyDtod(dst, src, count, kind)
         }
-        cudaMemcpyKind::cudaMemcpyDefault => todo!("cudaMemcpyDefault is not supported yet"),
+        cudaMemcpyKind::cudaMemcpyDefault => unreachable!(),
     }
 }
 
@@ -35,14 +62,18 @@ pub extern "C" fn cudaMemcpyAsync(
     dst: *mut c_void,
     src: *const c_void,
     count: usize,
-    kind: cudaMemcpyKind,
+    mut kind: cudaMemcpyKind,
     stream: cudaStream_t,
 ) -> cudaError_t {
     log::debug!(target: "cudaMemcpyAsync", "kind = {kind:?}");
+    if kind == cudaMemcpyKind::cudaMemcpyDefault {
+        kind = infer_memcpy_kind(dst, src);
+        log::debug!(target: "cudaMemcpyAsync", "inferred kind = {kind:?}");
+    }
     match kind {
         cudaMemcpyKind::cudaMemcpyHostToHost => unsafe {
             super::cudart_hijack::cudaStreamSynchronize(stream);
-            std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, count);
+            ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, count);
             cudaError_t::cudaSuccess
         },
         cudaMemcpyKind::cudaMemcpyHostToDevice => {
@@ -54,14 +85,14 @@ pub extern "C" fn cudaMemcpyAsync(
         cudaMemcpyKind::cudaMemcpyDeviceToDevice => {
             super::cudart_hijack::cudaMemcpyAsyncDtod(dst, src, count, kind, stream)
         }
-        cudaMemcpyKind::cudaMemcpyDefault => todo!("cudaMemcpyDefault is not supported yet"),
+        cudaMemcpyKind::cudaMemcpyDefault => unreachable!(),
     }
 }
 
 fn get_cufunction(func: HostPtr) -> cudasys::cuda::CUfunction {
     if !ClientThread::with_borrow(|client| client.cuda_device_init) {
         // https://docs.nvidia.com/cuda/cuda-c-programming-guide/#initialization
-        assert_eq!(super::cudart_hijack::cudaFree(std::ptr::null_mut()), Default::default());
+        assert_eq!(super::cudart_hijack::cudaFree(ptr::null_mut()), Default::default());
         ClientThread::with_borrow_mut(|client| client.cuda_device_init = true);
     }
 
@@ -94,7 +125,7 @@ fn get_cufunction(func: HostPtr) -> cudasys::cuda::CUfunction {
         let index = fatCubinHandle.to_index();
         log::debug!("registering fatbin #{index}");
         let image = runtime.lazy_fatbins[index];
-        let mut module = std::ptr::null_mut();
+        let mut module = ptr::null_mut();
         assert_eq!(
             super::cuda_hijack::cuModuleLoadDataInternal(&raw mut module, image.cast(), true),
             Default::default(),
@@ -105,7 +136,7 @@ fn get_cufunction(func: HostPtr) -> cudasys::cuda::CUfunction {
     let (fatCubinHandle, deviceName) = *runtime.lazy_functions.get(&func).unwrap();
     let module = *runtime.loaded_modules.entry(fatCubinHandle).or_insert_with_key(load_module);
     log::debug!("registering function {:?}", unsafe { CStr::from_ptr(deviceName) });
-    let mut cufunc = std::ptr::null_mut();
+    let mut cufunc = ptr::null_mut();
     assert_eq!(
         super::cuda_hijack::cuModuleGetFunction(&raw mut cufunc, module, deviceName),
         Default::default(),
@@ -119,7 +150,7 @@ pub extern "C" fn cudaLaunchKernel(
     func: HostPtr,
     gridDim: dim3,
     blockDim: dim3,
-    args: *mut *mut ::std::os::raw::c_void,
+    args: *mut *mut c_void,
     sharedMem: usize,
     stream: cudaStream_t,
 ) -> cudaError_t {
@@ -128,7 +159,7 @@ pub extern "C" fn cudaLaunchKernel(
     let cufunc = get_cufunction(func);
 
     unsafe {
-        std::mem::transmute(super::cuda_hijack::cuLaunchKernel(
+        mem::transmute(super::cuda_hijack::cuLaunchKernel(
             cufunc,
             gridDim.x,
             gridDim.y,
@@ -139,14 +170,14 @@ pub extern "C" fn cudaLaunchKernel(
             sharedMem.try_into().unwrap(),
             stream.cast(),
             args,
-            std::ptr::null_mut(),
+            ptr::null_mut(),
         ))
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn cudaHostAlloc(
-    pHost: *mut *mut ::std::os::raw::c_void,
+    pHost: *mut *mut c_void,
     size: usize,
     flags: c_uint,
 ) -> cudaError_t {
@@ -162,9 +193,15 @@ pub extern "C" fn cudaHostAlloc(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn cudaGetErrorString(
-    cudaError: cudaError_t,
-) -> *const ::std::os::raw::c_char {
+extern "C" fn cudaGetErrorName(cudaError: cudaError_t) -> *const c_char {
+    log::debug!(target: "cudaGetErrorName", "{cudaError:?}");
+    let result = format!("{cudaError:?}");
+    let result = CString::new(result).unwrap();
+    result.into_raw() // leaking the string as the program is about to fail anyway
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn cudaGetErrorString(cudaError: cudaError_t) -> *const c_char {
     log::debug!(target: "cudaGetErrorString", "{cudaError:?}");
     let result = format!("{cudaError:?} ({})", cudaError as u32);
     let result = CString::new(result).unwrap();
@@ -192,12 +229,7 @@ pub extern "C" fn __cudaPushCallConfiguration(
     stream: usize,
 ) -> cudaError_t {
     CALL_CONFIGURATIONS.with_borrow_mut(|v| {
-        v.push(CallConfiguration {
-            gridDim,
-            blockDim,
-            sharedMem,
-            stream,
-        });
+        v.push(CallConfiguration { gridDim, blockDim, sharedMem, stream });
     });
     cudaError_t::cudaSuccess
 }
@@ -223,10 +255,7 @@ pub extern "C" fn __cudaPopCallConfiguration(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn cudaFuncGetAttributes(
-    attr: *mut cudaFuncAttributes,
-    func: HostPtr,
-) -> cudaError_t {
+extern "C" fn cudaFuncGetAttributes(attr: *mut cudaFuncAttributes, func: HostPtr) -> cudaError_t {
     log::debug!(target: "cudaFuncGetAttributes", "");
     let func = get_cufunction(func);
     super::cudart_hijack::cudaFuncGetAttributesInternal(attr, func)
@@ -248,7 +277,7 @@ extern "C" fn cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
         dynamicSMemSize,
         flags,
     );
-    unsafe { std::mem::transmute(result) }
+    unsafe { mem::transmute(result) }
 }
 
 #[unsafe(no_mangle)]
@@ -258,12 +287,17 @@ extern "C" fn cudaFuncSetAttribute(
     value: c_int,
 ) -> cudaError_t {
     log::debug!(target: "cudaFuncSetAttribute", "");
-    #[expect(clippy::missing_transmute_annotations)]
     unsafe {
-        std::mem::transmute(super::cuda_hijack::cuFuncSetAttribute(
+        mem::transmute(super::cuda_hijack::cuFuncSetAttribute(
             get_cufunction(func),
-            std::mem::transmute(attr),
+            mem::transmute(attr),
             value,
         ))
     }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn __cudaGetKernel(arg1: *mut cudaKernel_t, arg2: HostPtr) -> cudaError_t {
+    unsafe { *arg1 = mem::transmute(arg2) };
+    cudaError_t::cudaSuccess
 }

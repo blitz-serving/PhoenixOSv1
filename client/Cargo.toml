@@ -15,24 +15,26 @@ log = { workspace = true }
 env_logger = { workspace = true }
 small_ctor = "0.1"
 core_affinity = { workspace = true }
-lz4_flex = { version = "0.11", default-features = false }
+lz4_flex = { version = "0.13", default-features = false }
 elf = "0.8"
 libc = { workspace = true }
 signal-hook-registry = "1.4"
+tokio = { workspace = true }
+pyo3 = { version = "0.28", default-features = false, optional = true }
 
 [build-dependencies]
 cudasys = { workspace = true }
 hookgen = { workspace = true }
-syn = { workspace = true, optional = true }
+syn = { workspace = true }
 
 [lib]
 crate-type = ["cdylib"]
 
 [features]
 default = ["phos"]
-rdma = ["network/rdma"]
-passthrough = ["dep:syn"]
+passthrough = []
 phos = []
+python-stack = ["dep:pyo3"]
 
 [lints]
 workspace = true

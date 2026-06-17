@@ -1,122 +1,60 @@
-use std::cell::Cell;
-use std::fs::File;
-use std::io::{ErrorKind, Read as _};
-use std::slice;
-
-use crate::{CommChannel, CommChannelError, CommChannelInnerIO, RawMemory, RawMemoryMut};
-
-pub struct RestoreFile(pub File);
-
-impl CommChannel for RestoreFile {
-    fn flush_out(&self) -> Result<(), CommChannelError> {
-        unimplemented!()
-    }
-}
-
-impl CommChannelInnerIO for RestoreFile {
-    fn put_bytes(&self, _src: &RawMemory) -> Result<usize, CommChannelError> {
-        unimplemented!()
-    }
-
-    fn try_put_bytes(&self, _src: &RawMemory) -> Result<usize, CommChannelError> {
-        unimplemented!()
-    }
-
-    fn get_bytes(&self, dst: &mut RawMemoryMut) -> Result<usize, CommChannelError> {
-        let buf = unsafe { slice::from_raw_parts_mut(dst.ptr, dst.len) };
-        match (&self.0).read_exact(buf) {
-            Ok(()) => Ok(dst.len),
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => Err(CommChannelError::RestoreEof),
-            Err(e) => {
-                log::error!("read failed: {e}");
-                Err(CommChannelError::IoError)
-            }
-        }
-    }
-
-    fn try_get_bytes(&self, _dst: &mut RawMemoryMut) -> Result<usize, CommChannelError> {
-        unimplemented!()
-    }
-
-    fn safe_try_get_bytes(&self, _dst: &mut RawMemoryMut) -> Result<usize, CommChannelError> {
-        unimplemented!()
-    }
-}
+use crate::{CommChannelError, RecvChannel, SendChannel};
 
 pub struct RestoreVec {
     vec: Vec<u8>,
-    pos: Cell<usize>,
+    pos: usize,
 }
 
 impl RestoreVec {
     pub const fn new(vec: Vec<u8>) -> Self {
-        Self { vec, pos: Cell::new(0) }
+        Self { vec, pos: 0 }
     }
 }
 
-impl CommChannel for RestoreVec {
-    fn flush_out(&self) -> Result<(), CommChannelError> {
-        unimplemented!()
-    }
-}
-
-impl CommChannelInnerIO for RestoreVec {
-    fn put_bytes(&self, _src: &RawMemory) -> Result<usize, CommChannelError> {
-        unimplemented!()
-    }
-
-    fn try_put_bytes(&self, _src: &RawMemory) -> Result<usize, CommChannelError> {
-        unimplemented!()
-    }
-
-    fn get_bytes(&self, dst: &mut RawMemoryMut) -> Result<usize, CommChannelError> {
-        let pos = self.pos.get();
-        let end = pos + dst.len;
+impl RecvChannel for RestoreVec {
+    fn get_bytes(&mut self, dst: &mut [u8]) -> Result<(), CommChannelError> {
+        let end = self.pos + dst.len();
         if end > self.vec.len() {
             Err(CommChannelError::RestoreEof)
         } else {
-            let buf = unsafe { slice::from_raw_parts_mut(dst.ptr, dst.len) };
-            buf.copy_from_slice(&self.vec[pos..end]);
-            self.pos.set(end);
-            Ok(dst.len)
+            dst.copy_from_slice(&self.vec[self.pos..end]);
+            self.pos = end;
+            Ok(())
         }
     }
 
-    fn try_get_bytes(&self, _dst: &mut RawMemoryMut) -> Result<usize, CommChannelError> {
-        unimplemented!()
-    }
-
-    fn safe_try_get_bytes(&self, _dst: &mut RawMemoryMut) -> Result<usize, CommChannelError> {
-        unimplemented!()
+    fn recv<T: Copy>(&mut self) -> Result<T, CommChannelError> {
+        let end = self.pos + size_of::<T>();
+        if end > self.vec.len() {
+            Err(CommChannelError::RestoreEof)
+        } else {
+            let result = unsafe { self.vec.as_ptr().add(self.pos).cast::<T>().read_unaligned() };
+            self.pos = end;
+            Ok(result)
+        }
     }
 }
 
 pub struct BlackHole;
 
-impl CommChannel for BlackHole {
-    fn flush_out(&self) -> Result<(), CommChannelError> {
+impl SendChannel for BlackHole {
+    fn flush(&mut self) -> Result<(), CommChannelError> {
         Ok(())
     }
-}
 
-impl CommChannelInnerIO for BlackHole {
-    fn put_bytes(&self, src: &RawMemory) -> Result<usize, CommChannelError> {
-        Ok(src.len)
+    fn put_bytes(&mut self, _src: &[u8]) -> Result<(), CommChannelError> {
+        Ok(())
     }
 
-    fn try_put_bytes(&self, _src: &RawMemory) -> Result<usize, CommChannelError> {
-        unimplemented!()
+    fn send<T: Copy>(&mut self, _src: &T) -> Result<(), CommChannelError> {
+        Ok(())
     }
 
-    fn get_bytes(&self, _dst: &mut RawMemoryMut) -> Result<usize, CommChannelError> {
-        unimplemented!()
+    fn send_unaligned<T: Copy>(&mut self, _src: *const T) -> Result<(), CommChannelError> {
+        Ok(())
     }
 
-    fn try_get_bytes(&self, _dst: &mut RawMemoryMut) -> Result<usize, CommChannelError> {
-        unimplemented!()
-    }
-
-    fn safe_try_get_bytes(&self, _dst: &mut RawMemoryMut) -> Result<usize, CommChannelError> {
-        unimplemented!()
+    fn send_slice<T: Copy>(&mut self, _src: &[T]) -> Result<(), CommChannelError> {
+        Ok(())
     }
 }

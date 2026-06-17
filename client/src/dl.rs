@@ -30,18 +30,25 @@ extern "C" fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void {
         return DLOPEN_ORIG(filename, flags);
     }
     log::debug!(target: "dlopen", "{name} (flags: {flags:#x})");
-    if name.contains("libcuda") || name.contains("libnvrtc.so") || name.contains("libnvidia-ml") || name.contains("libnccl.so") {
+    if name.contains("libcuda") || name.contains("libnvrtc.so") || name.contains("libnvidia-ml") || name.contains("libnccl.so") || name.contains("libcudnn.so") {
         if cfg!(feature = "passthrough") {
             assert!(!DLOPEN_ORIG(filename, 0x101).is_null());
         }
+        // if name.contains("libcuda.so") {
+        //     // #[thread_local]
+        //     static COUNT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+        //     let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        //     log::info!(target: "dlopen", "dlopen call count for libcuda: {count}");
+        //     if count >= 3 {
+        //         return std::ptr::null_mut();
+        //     }
+        // }
         // if the library is libcuda, libnvrtc or libnvidia-ml, return a handle to the client
         log::debug!(target: "dlopen", "replacing dlopen call to {} library with a handle to the client", name);
         static SELF_PATH: OnceLock<CString> = OnceLock::new();
         let self_path = SELF_PATH.get_or_init(|| {
             let mut result = env::var("LD_PRELOAD").unwrap().into_bytes();
-            if result.last() == Some(&b':') {
-                result.pop();
-            }
+            result.pop_if(|last| *last == b':');
             assert!(!result.contains(&b':'));
             CString::new(result).unwrap()
         });

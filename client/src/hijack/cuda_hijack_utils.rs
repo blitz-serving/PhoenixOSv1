@@ -19,7 +19,7 @@ pub fn pack_kernel_args(f: CUfunction, arg_ptrs: *mut *mut c_void) -> Box<[u8]> 
                 param.size() as usize,
             );
         }
-        if log::max_level() < log::Level::Trace {
+        if !log::log_enabled!(log::Level::Trace) {
             continue;
         }
         match param.size() {

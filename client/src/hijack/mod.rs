@@ -30,3 +30,20 @@ use codegen::cuda_hook_hijack;
 use crate::elf::{FatBinaryHeader, FatBinaryWrapper};
 use client::{ClientThread, FatBinaryHandle, HostPtr, DRIVER_CACHE, RUNTIME_CACHE};
 use handle::next_handle;
+
+fn cuda_unimplemented(name: &'static str) -> ! {
+    const PRINT_MAPS: bool = false;
+    if PRINT_MAPS {
+        let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
+        eprintln!("/proc/self/maps:\n{maps}");
+    }
+    #[cfg(feature = "python-stack")]
+    pyo3::Python::try_attach(|py| {
+        use pyo3::prelude::*;
+        let traceback = PyModule::import(py, "traceback").unwrap();
+        traceback.call_method0("print_stack").unwrap();
+    });
+    #[cfg(not(feature = "python-stack"))]
+    log::warn!("enable `python-stack` feature to print Python stack traces");
+    unimplemented!("{name}")
+}

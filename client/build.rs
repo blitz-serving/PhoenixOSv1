@@ -1,6 +1,9 @@
-use std::{env, fs, path::PathBuf};
+use std::path::PathBuf;
+use std::{env, fs};
 
 fn main() {
+    cudasys::emit_cuda_version_cfg();
+
     create_cuda_symlinks();
 
     #[cfg(not(feature = "passthrough"))]
@@ -11,6 +14,13 @@ fn main() {
         "_hijack",
         Some("_unimplement"),
         (cudasys::cuda::CUDA_VERSION / 1000) as u8,
+        |sig| {
+            let name = sig.ident.to_string();
+            if name.starts_with("cuGetProcAddress") {
+                return None;
+            }
+            Some(syn::parse_quote!({ super::cuda_unimplemented(#name) }))
+        },
     );
 
     #[cfg(feature = "passthrough")]
@@ -77,13 +87,16 @@ fn create_cuda_symlinks() {
         "libcuda.so.1",
         "libcudart.so.11.0",
         "libcudart.so.12",
+        "libcudart.so.13",
         "libnvidia-ml.so.1",
         "libcudnn.so.8",
         "libcudnn.so.9",
         "libcublas.so.11",
         "libcublas.so.12",
+        "libcublas.so.13",
         "libcublasLt.so.11",
         "libcublasLt.so.12",
+        "libcublasLt.so.13",
         "libnvrtc.so.11.2",
         "libnvrtc.so.11.3",
     ] {

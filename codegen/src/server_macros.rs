@@ -20,7 +20,7 @@ pub fn exe(input: &HookFn) -> TokenStream {
                     let #name: #ty = recv_ctx.recv(#name_str);
                 }
             }
-            InputHandle(op) => {
+            InputHandle { op, .. } => {
                 let ty = param.raw_type();
                 let is_destroy = match op {
                     InputHandleOp::Use | InputHandleOp::Modify => false,
@@ -62,7 +62,7 @@ pub fn exe(input: &HookFn) -> TokenStream {
                     let #ptr_ident = #name.as_ptr();
                 }
             }
-            OutputHandle => {
+            OutputHandle { .. } => {
                 quote! {
                     if server.opt_shadow_desc {
                         handle_proxy = Some(recv_ctx.recv(#name_str));
@@ -84,9 +84,9 @@ pub fn exe(input: &HookFn) -> TokenStream {
         let Param { name, .. } = param;
         let ptr_ident = param.exe_ptr();
         match &param.kind {
-            OutputHandle | OutputSinglePtr => {
+            OutputHandle { .. } | OutputSinglePtr => {
                 let ty = param.deref_type();
-                let set_handle_output = if let OutputHandle = param.kind {
+                let set_handle_output = if matches!(param.kind, OutputHandle { .. }) {
                     quote! {
                         if server.opt_shadow_desc {
                             handle_output = Some(#ptr_ident.cast());
@@ -106,7 +106,7 @@ pub fn exe(input: &HookFn) -> TokenStream {
                 let cap = usize_from(cap.as_ref().unwrap_or(len));
                 quote! {
                     let mut #name = Box::<[#ty]>::new_uninit_slice(#cap);
-                    let #ptr_ident = std::mem::MaybeUninit::slice_as_mut_ptr(&mut #name);
+                    let #ptr_ident = #name.as_mut_ptr().cast_init();
                 }
             }
             kind => panic!("unhandled kind: {kind:?}"),
@@ -131,11 +131,11 @@ pub fn exe(input: &HookFn) -> TokenStream {
         let exec_args = params.iter().filter_map(|param| {
             let ptr_ident = param.exe_ptr();
             match &param.kind {
-                InputValue | InputHandle(_) | DeviceInputPtr | DeviceOutputPtr => {
+                InputValue | InputHandle { .. } | DeviceInputPtr | DeviceOutputPtr => {
                     Some(param.name.to_token_stream())
                 }
                 InputSinglePtr if param.is_hacked_type() => Some(quote!(#ptr_ident.cast())),
-                InputSinglePtr | InputCStr | OutputHandle | OutputSinglePtr => {
+                InputSinglePtr | InputCStr | OutputHandle { .. } | OutputSinglePtr => {
                     Some(quote!(#ptr_ident))
                 }
                 InputArrayPtr { is_void_ptr, .. } | OutputArrayPtr { is_void_ptr, .. } => {
@@ -150,15 +150,30 @@ pub fn exe(input: &HookFn) -> TokenStream {
             }
         });
         let func = input.parent.as_ref().unwrap_or(input.func());
-        quote! {
+        let exec_statement = quote! {
             let #result_name: #result_ty = unsafe { #func(#(#exec_args),*) };
+        };
+        if input.injections.server_execution_phos.is_empty() {
+            exec_statement
+        } else {
+            let phos_statements = input.injections.server_execution_phos.iter();
+            quote! {
+                cfg_select! {
+                    feature = "phos" => {
+                        #( #phos_statements )*
+                    }
+                    _ => {
+                        #exec_statement
+                    }
+                }
+            }
         }
     };
 
     let send_statements = params.iter().filter(|p| p.is_host_output()).map(|param| {
         let Param { name, name_str, .. } = param;
         match &param.kind {
-            OutputHandle | OutputSinglePtr => quote! {
+            OutputHandle { .. } | OutputSinglePtr => quote! {
                 send_ctx.send(&#name, #name_str);
             },
             OutputArrayPtr { cap: None, .. } => {
@@ -182,7 +197,16 @@ pub fn exe(input: &HookFn) -> TokenStream {
 
     let server_extra_recv = input.injections.server_extra_recv.iter();
     let server_before_execution = input.injections.server_before_execution.iter();
+    let server_initial_send = input.injections.server_initial_send.iter();
     let server_after_send = input.injections.server_after_send.iter();
+    let handle_op_key = input
+        .params
+        .iter()
+        .find_map(|param| {
+            let op_key = param.handle_op_key()?;
+            Some(quote!(Some(#op_key)))
+        })
+        .unwrap_or_else(|| quote!(None));
 
     let proc_id = &input.proc_id;
     let func = input.func();
@@ -190,7 +214,7 @@ pub fn exe(input: &HookFn) -> TokenStream {
     let func_exe = format_ident!("{func}Exe");
 
     quote! {
-        pub fn #func_exe(server: &mut ServerWorker) {
+        pub fn #func_exe(server: &mut ServerThread) {
             server.before_call(#func_str);
 
             // set if opt_shadow_desc && (is_create_handle || is_modify_handle)
@@ -199,12 +223,12 @@ pub fn exe(input: &HookFn) -> TokenStream {
             let mut handle_output: Option<*mut usize> = None;
 
             let is_phos = cfg!(feature = "phos") && server.opt_shadow_desc;
-            let is_create_handle = #is_create_handle;
+            let mut is_create_handle = #is_create_handle;
             let is_modify_handle = #is_modify_handle;
 
             let mut recv_ctx = network::session::RecvSession::begin_server(
                 server.id,
-                &server.channel_receiver,
+                &mut server.channel_receiver,
                 #func_str,
                 is_phos && (is_create_handle || is_modify_handle),
                 #proc_id,
@@ -215,18 +239,27 @@ pub fn exe(input: &HookFn) -> TokenStream {
             let save_args = recv_ctx.finish();
             #( #def_statements )*
             #( #server_before_execution )*
+
+            let mut send_ctx = network::session::SendSession::begin(
+                server.id,
+                &mut server.channel_sender,
+                #func_str,
+            );
+
             #exec_statement
             #( #assume_init )*
 
-            if #result_name.is_error() {
+            if cudasys::types::CheckError::is_error(#result_name) {
                 log::error!(target: #func_str, "[#{}] returned error: {:?}", server.id, #result_name);
             }
             if is_create_handle && server.opt_shadow_desc {
                 server.resources.insert(handle_proxy.unwrap(), unsafe { *handle_output.unwrap() });
             }
+            let proc_id: i32 = #proc_id;
+            let handle_op_key: Option<u64> = #handle_op_key;
             #[cfg(feature = "phos")]
             if let Some(save_args) = save_args {
-                server.resources.insert_args(handle_proxy.unwrap(), save_args);
+                server.resources.insert_args(handle_proxy.unwrap(), handle_op_key, save_args);
             }
             if is_create_handle && server.opt_shadow_desc {
                 return;
@@ -237,12 +270,7 @@ pub fn exe(input: &HookFn) -> TokenStream {
                 return;
             }
 
-            let send_ctx = network::session::SendSession::begin(
-                server.id,
-                &server.channel_sender,
-                #func_str,
-            );
-
+            #( #server_initial_send )*
             #( #send_statements )*
             send_ctx.send(&#result_name, stringify!(#result_name));
             send_ctx.finish();

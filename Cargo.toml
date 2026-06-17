@@ -6,7 +6,7 @@ members = [
     "cudasys",
     "cudasys/hookgen",
     "measure",
-    "network", "phos",
+    "network",
     "server",
 ]
 
@@ -23,8 +23,10 @@ hookdef = { path = "codegen/hookdef" }
 hookgen = { path = "cudasys/hookgen" }
 measure = { path = "measure" }
 network = { path = "network" }
+bincode = "2.0"
 core_affinity = "0.8.1"
 env_logger = "0.9"
+futures = "0.3"
 libc = "*"
 log = "0.4.0"
 prettyplease = "0.2"
@@ -32,6 +34,12 @@ proc-macro2 = "1.0"
 quote = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 syn = { version = "2.0", features = ["full", "extra-traits"] }
+tarpc = { version = "0.37", features = ["serde-transport-bincode", "tcp", "unix"] }
+tokio = { version = "1.0", features = ["signal", "macros"]}
 
 [workspace.lints.rust]
 rust-2018-idioms = "warn"
+
+[workspace.lints.clippy]
+missing_transmute_annotations = "allow"
+missing_safety_doc = "allow"

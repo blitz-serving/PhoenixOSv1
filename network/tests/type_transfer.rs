@@ -1,8 +1,9 @@
-use cudasys::cudart::cudaError_t;
-use network::{ringbufferchannel::SHMChannel, CommChannel, Transportable};
-
 use std::sync::{Arc, Barrier};
 use std::thread;
+
+use cudasys::cudart::cudaError_t;
+use network::ringbufferchannel::SHMChannel;
+use network::{RecvChannel, SendChannel};
 
 const VALUES: [cudaError_t; 10] = [
     cudaError_t::cudaSuccess,
@@ -37,8 +38,8 @@ fn test_cudaerror() {
 
         for i in 0..test_iters {
             let var = VALUES[i % VALUES.len()];
-            var.send(&mut producer_channel).unwrap();
-            producer_channel.flush_out().unwrap();
+            producer_channel.send(&var).unwrap();
+            producer_channel.flush().unwrap();
         }
 
         println!("Producer done");
@@ -53,7 +54,7 @@ fn test_cudaerror() {
         while received < test_iters {
             let test = VALUES[received % VALUES.len()];
             let mut var = cudaError_t::cudaSuccess;
-            var.recv(&mut consumer_channel).unwrap();
+            consumer_channel.recv_to(&mut var).unwrap();
             assert_eq!(var, test);
             received += 1;
         }

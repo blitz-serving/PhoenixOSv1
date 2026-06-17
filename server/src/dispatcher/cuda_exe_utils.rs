@@ -1,7 +1,20 @@
 use std::os::raw::*;
+use std::ptr;
 
 use cudasys::cuda::*;
 
+// We take the address of len to avoid returning a dangling local pointer.
+fn build_extra_array(ptr: *const u8, len: &usize) -> [*mut c_void; 5] {
+    [
+        1 as _, // CU_LAUNCH_PARAM_BUFFER_POINTER
+        ptr as _,
+        2 as _, // CU_LAUNCH_PARAM_BUFFER_SIZE
+        ptr::from_ref(len) as _,
+        ptr::null_mut(), // CU_LAUNCH_PARAM_END
+    ]
+}
+
+#[expect(clippy::too_many_arguments)]
 pub fn cu_launch_kernel(
     f: CUfunction,
     gridDimX: c_uint,
@@ -15,14 +28,6 @@ pub fn cu_launch_kernel(
     args: &[u8],
 ) -> CUresult {
     unsafe {
-        let args_len = args.len();
-        let extra_array: [*mut c_void; 5] = [
-            1 as _, // CU_LAUNCH_PARAM_BUFFER_POINTER
-            args.as_ptr() as _,
-            2 as _, // CU_LAUNCH_PARAM_BUFFER_SIZE
-            &raw const args_len as _,
-            std::ptr::null_mut(), // CU_LAUNCH_PARAM_END
-        ];
         cuLaunchKernel(
             f,
             gridDimX,
@@ -33,8 +38,20 @@ pub fn cu_launch_kernel(
             blockDimZ,
             sharedMemBytes,
             hStream,
-            std::ptr::null_mut(),
-            extra_array.as_ptr().cast_mut(),
+            ptr::null_mut(),
+            build_extra_array(args.as_ptr(), &args.len()).as_mut_ptr(),
+        )
+    }
+}
+
+#[cfg(cuda_version = "12")]
+pub fn cu_launch_kernel_ex(config: &CUlaunchConfig, f: CUfunction, args: &[u8]) -> CUresult {
+    unsafe {
+        cuLaunchKernelEx(
+            config,
+            f,
+            ptr::null_mut(),
+            build_extra_array(args.as_ptr(), &args.len()).as_mut_ptr(),
         )
     }
 }

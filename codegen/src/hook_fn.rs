@@ -4,14 +4,17 @@ use std::borrow::Cow;
 use std::mem;
 
 use hookdef::{HookAttrs, HookFnItem, HookInjections, check_max_attributes, is_hacked_type};
-use proc_macro2::{Ident, TokenStream};
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
+use syn::spanned::Spanned as _;
 use syn::{
-    Attribute, Error, Expr, FnArg, Lit, LitInt, Meta, Pat, PatIdent, PatType, Result, ReturnType,
-    Signature, Token, Type, TypePtr, parse_quote,
+    Attribute, Error, Expr, FnArg, Lit, LitInt, LitStr, Meta, Pat, PatIdent, PatType, Result,
+    ReturnType, Signature, Token, Type, TypePtr, parse_quote,
 };
 
-use crate::utils::{is_async_return_type, is_const_cstr, is_handle_type, is_void_ptr};
+use crate::utils::{
+    is_async_return_type, is_const_cstr, is_handle_type, is_handle_type_with_op_key, is_void_ptr,
+};
 
 pub struct HookFn {
     pub proc_id: LitInt,
@@ -32,10 +35,18 @@ impl HookFn {
     fn new(attrs: HookAttrs, item: HookFnItem) -> Result<Self> {
         let HookFnItem { mut sig, injections } = item;
 
+        let mut errors = Ok(());
         let mut params = Vec::with_capacity(sig.inputs.len());
         for arg in mem::take(&mut sig.inputs) {
-            params.push(Param::parse(arg)?);
+            match Param::parse(arg) {
+                Ok(param) => params.push(param),
+                Err(e) => match &mut errors {
+                    Ok(()) => errors = Err(e),
+                    Err(errors) => errors.combine(e),
+                },
+            }
         }
+        errors?;
 
         if let Some(true) = attrs.is_async_api {
             check_async_api(&params, &sig.output, &injections)?;
@@ -46,8 +57,10 @@ impl HookFn {
             .filter(|param| {
                 matches!(
                     param.kind,
-                    ParamKind::InputHandle(InputHandleOp::Modify | InputHandleOp::Destroy)
-                        | ParamKind::OutputHandle
+                    ParamKind::InputHandle {
+                        op: InputHandleOp::Modify | InputHandleOp::Destroy,
+                        ..
+                    } | ParamKind::OutputHandle { .. }
                 )
             })
             .count()
@@ -106,9 +119,9 @@ impl HookFn {
     }
 
     pub fn is_modify_handle(&self) -> bool {
-        self.params
-            .iter()
-            .any(|param| matches!(param.kind, ParamKind::InputHandle(InputHandleOp::Modify)))
+        self.params.iter().any(|param| {
+            matches!(param.kind, ParamKind::InputHandle { op: InputHandleOp::Modify, .. })
+        })
     }
 
     pub fn into_plain_fn(self) -> TokenStream {
@@ -136,7 +149,7 @@ impl HookFn {
 }
 
 fn is_create_handle(params: &[Param]) -> bool {
-    params.iter().any(|param| matches!(param.kind, ParamKind::OutputHandle))
+    params.iter().any(|param| matches!(param.kind, ParamKind::OutputHandle { .. }))
 }
 
 fn check_async_api(
@@ -230,16 +243,21 @@ impl Param {
     pub fn setup_exe_ptr(&mut self) {
         self.exe_ptr = Some(format_ident!("{}__ptr", self.name));
     }
+
+    pub fn handle_op_key(&self) -> Option<&Expr> {
+        self.kind.handle_op_key()
+    }
 }
 
 #[derive(Debug)]
+#[expect(dead_code)]
 pub enum ParamKind {
     InputValue,
-    InputHandle(InputHandleOp),
+    InputHandle { op: InputHandleOp, op_key: Option<Box<Expr>> },
     InputSinglePtr,
     InputArrayPtr { is_void_ptr: bool, len: Box<Expr> },
     InputCStr,
-    OutputHandle,
+    OutputHandle { op_key: Option<Box<Expr>> },
     OutputSinglePtr,
     OutputArrayPtr { is_void_ptr: bool, len: Box<Expr>, cap: Option<Box<Expr>> },
     DeviceInputPtr,
@@ -291,9 +309,11 @@ impl ParamKind {
 
         if is_handle_type(ty) {
             return if let Some(attr) = &attr
-                && let Some(op) = InputHandleOp::parse(&parse_handle_op(attr)?)
+                && let handle = HandleAttr::parse(attr)?
+                && let Some(op) = InputHandleOp::parse(&handle.op)
+                && let op_key = handle.validated_op_key(ty)?
             {
-                Ok(Self::InputHandle(op))
+                Ok(Self::InputHandle { op, op_key })
             } else {
                 Err(Error::new_spanned(
                     ty,
@@ -314,9 +334,11 @@ impl ParamKind {
                 return Err(Error::new_spanned(ptr, "unexpected *const handle"));
             }
             return if let Some(attr) = &attr
-                && parse_handle_op(attr)? == "create"
+                && let handle = HandleAttr::parse(attr)?
+                && handle.op == "create"
+                && let op_key = handle.validated_op_key(&ptr.elem)?
             {
-                Ok(Self::OutputHandle)
+                Ok(Self::OutputHandle { op_key })
             } else {
                 Err(Error::new_spanned(ptr, "requires #[handle = \"create\"]"))
             };
@@ -339,9 +361,9 @@ impl ParamKind {
 
     fn is_host_output(&self) -> bool {
         match self {
-            Self::OutputHandle | Self::OutputSinglePtr | Self::OutputArrayPtr { .. } => true,
+            Self::OutputHandle { .. } | Self::OutputSinglePtr | Self::OutputArrayPtr { .. } => true,
             Self::InputValue
-            | Self::InputHandle(_)
+            | Self::InputHandle { .. }
             | Self::InputSinglePtr
             | Self::InputArrayPtr { .. }
             | Self::InputCStr
@@ -349,6 +371,13 @@ impl ParamKind {
             | Self::DeviceOutputPtr
             | Self::Skip
             | Self::Const(_) => false,
+        }
+    }
+
+    fn handle_op_key(&self) -> Option<&Expr> {
+        match self {
+            Self::InputHandle { op_key, .. } | Self::OutputHandle { op_key } => op_key.as_deref(),
+            _ => None,
         }
     }
 }
@@ -418,13 +447,58 @@ fn parse_ptr_attr(attr: &Attribute, ptr: &TypePtr) -> Result<ParamKind> {
     }
 }
 
-fn parse_handle_op(attr: &Attribute) -> Result<String> {
-    if attr.path().require_ident()? == "handle"
-        && let Expr::Lit(expr) = &attr.meta.require_name_value()?.value
-        && let Lit::Str(op) = &expr.lit
-    {
-        Ok(op.value())
-    } else {
-        Err(Error::new_spanned(attr, "expected #[handle = \"...\"]"))
+struct HandleAttr {
+    op: String,
+    op_key: Option<Box<Expr>>,
+    span: Span,
+}
+
+impl HandleAttr {
+    fn parse(attr: &Attribute) -> Result<Self> {
+        if attr.path().require_ident()? != "handle" {
+            return Err(Error::new_spanned(attr, "expected #[handle = \"...\"]"));
+        }
+
+        if let Meta::NameValue(meta) = &attr.meta {
+            return if let Expr::Lit(expr) = &meta.value
+                && let Lit::Str(op) = &expr.lit
+            {
+                Ok(Self { op: op.value(), op_key: None, span: attr.span() })
+            } else {
+                Err(Error::new_spanned(attr, "expected #[handle = \"...\"]"))
+            };
+        }
+
+        let mut op = None;
+        let mut op_key = None;
+        attr.parse_nested_meta(|meta| {
+            let ident = meta.path.require_ident()?.to_string();
+            match ident.as_str() {
+                "op" => op = Some(meta.value()?.parse::<LitStr>()?.value()),
+                "op_key" => op_key = Some(meta.value()?.parse()?),
+                _ => return Err(meta.error("unsupported property")),
+            }
+            Ok(())
+        })?;
+
+        match op {
+            Some(op) => Ok(Self { op, op_key, span: attr.span() }),
+            None => Err(Error::new_spanned(attr, "invalid handle attribute")),
+        }
+    }
+
+    fn validated_op_key(self, ty: &Type) -> Result<Option<Box<Expr>>> {
+        let requires_key =
+            matches!(self.op.as_str(), "create" | "modify") && is_handle_type_with_op_key(ty);
+
+        match (self.op_key, requires_key) {
+            (Some(op_key), true) => Ok(Some(op_key)),
+            (None, false) => Ok(None),
+            (Some(_), false) => Err(Error::new(self.span, "unexpected `op_key` for this handle")),
+            (None, true) => {
+                let message = format!("expected #[handle(op = \"{}\", op_key = ...)]", self.op);
+                Err(Error::new(self.span, message))
+            }
+        }
     }
 }

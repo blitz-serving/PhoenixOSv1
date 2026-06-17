@@ -1,20 +1,17 @@
-use crate::ringbufferchannel::{
-    BufferManager, RingBufferChannel, RingBufferManager, HEAD_OFF, META_AREA, TAIL_OFF,
-};
-use crate::{CommChannelError, CommChannelInner, NetworkConfig};
-
 use std::cell::Cell;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use KRdmaKit::ControlpathError::CreationError;
 use KRdmaKit::context::Context;
 use KRdmaKit::services_user::{
     ConnectionManagerServer, DefaultConnectionManagerHandler, MRInfo, MRWrapper,
 };
-use KRdmaKit::{
-    ControlpathError::CreationError, MemoryRegion, QueuePair, QueuePairBuilder, QueuePairStatus,
-    UDriver,
-};
+use KRdmaKit::{MemoryRegion, QueuePair, QueuePairBuilder, QueuePairStatus, UDriver};
+
+use super::{BufferManager, HEAD_OFF, META_AREA, RingBufferManager, TAIL_OFF};
+use crate::config::{CommonConfig, NetworkConfig};
+use crate::{CommChannelError, CommChannelInner};
 
 /// Controls how often we send a signaled request.
 /// https://github.com/jcxue/RDMA-Tutorial/wiki#selective-signaling
@@ -35,16 +32,42 @@ pub struct RDMAChannel {
     last_tail: Cell<usize>,
 }
 
+pub struct RdmaConfig<'a> {
+    pub handshake_socket: &'a str,
+    pub device_name: &'a str,
+    pub device_port: u8,
+    pub stoc_channel_name: &'a str,
+    pub ctos_channel_name: &'a str,
+    pub buf_size: usize,
+}
+
+impl<'a> RdmaConfig<'a> {
+    pub fn from(common: &'a CommonConfig, network: &'a NetworkConfig) -> Self {
+        Self {
+            handshake_socket: network.handshake_socket.as_str(),
+            device_name: network.device_name.as_str(),
+            device_port: network.device_port,
+            stoc_channel_name: common.stoc_channel_name.as_str(),
+            ctos_channel_name: common.ctos_channel_name.as_str(),
+            buf_size: common.buf_size,
+        }
+    }
+}
+
 impl RDMAChannel {
-    pub fn new_server(config: &NetworkConfig, id: i32) -> (Self, Self) {
-        let mut addr: SocketAddr = config.receiver_socket.parse().unwrap();
+    pub fn new_server(common: &CommonConfig, network: &NetworkConfig, id: i32) -> (Self, Self) {
+        Self::new_server_inner(&RdmaConfig::from(common, network), id)
+    }
+
+    pub fn new_server_inner(config: &RdmaConfig<'_>, id: i32) -> (Self, Self) {
+        let mut addr: SocketAddr = config.handshake_socket.parse().unwrap();
         addr.set_port(addr.port() + id as u16);
 
         let (ctx, mr, mr2) = Self::allocate_mr(&config.device_name, config.buf_size);
         let mut handler = DefaultConnectionManagerHandler::new(&ctx, config.device_port);
         handler.register_mr(vec![
-            (config.ctos_channel_name.clone(), mr),
-            (config.stoc_channel_name.clone(), mr2),
+            (config.ctos_channel_name.to_owned(), mr),
+            (config.stoc_channel_name.to_owned(), mr2),
         ]);
         let cm = ConnectionManagerServer::new(handler);
         let listener = cm.spawn_listener(addr);
@@ -73,33 +96,31 @@ impl RDMAChannel {
 
         (
             Self::new(
-                registered_mr.remove(config.ctos_channel_name.as_str()).unwrap(),
+                registered_mr.remove(config.ctos_channel_name).unwrap(),
                 Arc::clone(&qp),
-                *remote_mr.inner().get(config.ctos_channel_name.as_str()).unwrap(),
+                *remote_mr.inner().get(config.ctos_channel_name).unwrap(),
             ),
             Self::new(
-                registered_mr.remove(config.stoc_channel_name.as_str()).unwrap(),
+                registered_mr.remove(config.stoc_channel_name).unwrap(),
                 qp,
-                *remote_mr.inner().get(config.stoc_channel_name.as_str()).unwrap(),
+                *remote_mr.inner().get(config.stoc_channel_name).unwrap(),
             ),
         )
     }
 
-    pub fn new_client(config: &NetworkConfig, id: i32) -> (Self, Self) {
-        let mut addr: SocketAddr = config.receiver_socket.parse().unwrap();
+    pub fn new_client(common: &CommonConfig, network: &NetworkConfig, id: i32) -> (Self, Self) {
+        Self::new_client_inner(&RdmaConfig::from(common, network), id)
+    }
+
+    pub fn new_client_inner(config: &RdmaConfig<'_>, id: i32) -> (Self, Self) {
+        let mut addr: SocketAddr = config.handshake_socket.parse().unwrap();
         addr.set_port(addr.port() + id as u16);
 
         let (ctx, mr, mr2) = Self::allocate_mr(&config.device_name, config.buf_size);
         let mut builder = QueuePairBuilder::new(&ctx);
-        builder
-            .allow_remote_rw()
-            .allow_remote_atomic()
-            .set_port_num(config.device_port);
+        builder.allow_remote_rw().allow_remote_atomic().set_port_num(config.device_port);
         let qp = loop {
-            let qp = builder
-                .clone()
-                .build_rc()
-                .expect("failed to create the client QP");
+            let qp = builder.clone().build_rc().expect("failed to create the client QP");
             match qp.handshake(addr) {
                 Ok(res) => {
                     break res;
@@ -124,8 +145,8 @@ impl RDMAChannel {
 
         // Send client side mr info to server.
         let mrs = vec![
-            (config.ctos_channel_name.clone(), mr),
-            (config.stoc_channel_name.clone(), mr2),
+            (config.ctos_channel_name.to_owned(), mr),
+            (config.stoc_channel_name.to_owned(), mr2),
         ];
         let mut mr_wrapper: MRWrapper = Default::default();
         mr_wrapper.insert(mrs);
@@ -134,14 +155,14 @@ impl RDMAChannel {
 
         (
             Self::new(
-                mr_wrapper.inner.remove(config.ctos_channel_name.as_str()).unwrap(),
+                mr_wrapper.inner.remove(config.ctos_channel_name).unwrap(),
                 Arc::clone(&qp),
-                *mr_infos.inner().get(config.ctos_channel_name.as_str()).unwrap(),
+                *mr_infos.inner().get(config.ctos_channel_name).unwrap(),
             ),
             Self::new(
-                mr_wrapper.inner.remove(config.stoc_channel_name.as_str()).unwrap(),
+                mr_wrapper.inner.remove(config.stoc_channel_name).unwrap(),
                 qp,
-                *mr_infos.inner().get(config.stoc_channel_name.as_str()).unwrap(),
+                *mr_infos.inner().get(config.stoc_channel_name).unwrap(),
             ),
         )
     }
@@ -274,8 +295,6 @@ impl BufferManager for RDMAChannel {
 
 impl RingBufferManager for RDMAChannel {}
 
-impl RingBufferChannel for RDMAChannel {}
-
 impl CommChannelInner for RDMAChannel {
     fn flush_out(&self) -> Result<(), CommChannelError> {
         let cur_tail = self.read_tail_volatile();
@@ -288,7 +307,7 @@ impl CommChannelInner for RDMAChannel {
             self.write_remote(META_AREA, cur_tail);
         }
 
-        self.write_tail_volatile(cur_tail);
+        self.write_tail_volatile(cur_tail); // TODO: ???
         self.write_tail_remote(cur_tail);
         self.set_last_tail(cur_tail);
 
