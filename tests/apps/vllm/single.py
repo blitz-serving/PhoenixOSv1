@@ -1,5 +1,6 @@
 import subprocess
 from os import environ, getpid
+from time import perf_counter
 
 environ.update({
     "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
@@ -35,8 +36,10 @@ def main():
     llm.sleep()
     run_checked("detach", "--client-pid", str(PID))
 
+    start = perf_counter()
     run_checked("attach", "--client-pid", str(PID))
     llm.wake_up()
+    print(f"Attach + wake up: {perf_counter() - start:.6f} s")
 
     outputs: list[RequestOutput] = llm.generate(PROMPT, SamplingParams(max_tokens=MAX_TOKENS))
 

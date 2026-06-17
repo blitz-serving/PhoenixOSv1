@@ -1,5 +1,6 @@
 import subprocess
 from os import environ
+from time import perf_counter
 from typing import cast
 
 environ.update({
@@ -25,6 +26,7 @@ ENV.pop("LD_LIBRARY_PATH", None)
 
 
 def main():
+    print("Offline phase")
     llms: dict[int, LLM] = {}
 
     for model in MODELS:
@@ -44,10 +46,13 @@ def main():
 
     # Standby for faster attaching; comment out to create new worker for each attach.
     run_checked("standby", "--client-pids", ",".join(str(pid) for pid in llms))
+    print("Online phase")
 
     for pid, llm in llms.items():
+        start = perf_counter()
         run_checked("attach", "--client-pid", str(pid))
         llm.wake_up()
+        print(f"Attach + wake up: {perf_counter() - start:.6f} s")
         llm.generate(PROMPT, SamplingParams(max_tokens=MAX_TOKENS))
         sleep(llm)
         run_checked("detach", "--client-pid", str(pid))
