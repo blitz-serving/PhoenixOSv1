@@ -1,5 +1,7 @@
 # vLLM v0.19.1 Examples
 
+This README provides example to run checkpoint and restore (with and without a context service) on vLLM. 
+
 You need to run these examples in the provided `environment/vllm` Docker Compose environment.
 
 Follow the steps in [environment/README.md](../../../environment/README.md) to start a container and spawn a terminal in it.
