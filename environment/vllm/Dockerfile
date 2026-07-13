@@ -31,4 +31,11 @@ RUN set -eux; \
     ln -sf ${PY_NVIDIA}/cuda_nvrtc/lib/libnvrtc.so.12 ${CUDA_LIB}/libnvrtc.so; \
     ln -sf ${PY_NVIDIA}/cuda_nvrtc/lib/libnvrtc.so.12 ${CUDA_LIB}/libnvrtc.so.12
 
+ENV RUSTUP_DIST_SERVER=https://mirrors.cernet.edu.cn/rustup \
+    RUSTUP_UPDATE_ROOT=https://mirrors.cernet.edu.cn/rustup/rustup \
+    PATH=/root/.cargo/bin:${PATH}
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain nightly
+
 ENTRYPOINT ["sleep", "inf"]

@@ -1,6 +1,5 @@
 import subprocess
 from os import environ, getpid
-from time import perf_counter
 
 environ.update({
     "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
@@ -10,11 +9,12 @@ environ.update({
 from vllm import LLM, SamplingParams
 from vllm.outputs import RequestOutput
 
-MODEL = "/path/to/model"
+MODEL = "/models/Qwen3-0.6B"
 PROMPT = "Hello, I'm a language model,"
 MAX_TOKENS = 320
 CLI = "/workspace/target/release/server"
 PID = getpid()
+CKPT_DIR = "/workspace/ckpt"
 
 ENV = environ.copy()
 ENV.pop("LD_PRELOAD")
@@ -34,12 +34,10 @@ def main():
     )
 
     llm.sleep()
-    run_checked("detach", "--client-pid", str(PID))
 
-    start = perf_counter()
-    run_checked("attach", "--client-pid", str(PID))
+    run("checkpoint", "--ckpt-dir", CKPT_DIR)
+
     llm.wake_up()
-    print(f"Attach + wake up: {perf_counter() - start:.6f} s")
 
     outputs: list[RequestOutput] = llm.generate(PROMPT, SamplingParams(max_tokens=MAX_TOKENS))
     for output in outputs:
@@ -57,8 +55,8 @@ def init_process_group():
     dist.init_process_group(backend="gloo", store=dist.HashStore(), rank=0, world_size=1)
 
 
-def run_checked(*args: str):
-    subprocess.run((CLI, *args), env=ENV, check=True)
+def run(*args: str):
+    subprocess.run((CLI, *args), env=ENV)
 
 
 if __name__ == "__main__":

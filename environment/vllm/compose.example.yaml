@@ -13,8 +13,10 @@ services:
           devices:
             - capabilities: [gpu]
               # device_ids: ["0"]
+    # environment:
+    #   - VLLM_USE_MODELSCOPE=True
     devices:
-      - /dev/infiniband:/dev/infiniband
+      - /dev/infiniband
     network_mode: host # for TCP and RDMA handshake
     shm_size: 256GB # for SHM channel; not using "ipc: host" for namespace isolation
     ulimits:
@@ -22,6 +24,6 @@ services:
       stack: 67108864
     volumes:
       - ../..:/workspace
-      # - /path/to/docker-root:/root
+      # - /path/to/docker-root:/root # this shadows Rust installation in the image
     # Uncomment to use CRIU
     # privileged: true

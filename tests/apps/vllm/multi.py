@@ -16,7 +16,7 @@ MODELS = [
     "/path/to/model-1",
     "/path/to/model-2",
 ]
-PROMPT = "placeholder"
+PROMPT = "Hello, I'm a language model,"
 MAX_TOKENS = 320
 CLI = "/workspace/target/release/server"
 
@@ -53,7 +53,10 @@ def main():
         run_checked("attach", "--client-pid", str(pid))
         llm.wake_up()
         print(f"Attach + wake up: {perf_counter() - start:.6f} s")
-        llm.generate(PROMPT, SamplingParams(max_tokens=MAX_TOKENS))
+        outputs = llm.generate(PROMPT, SamplingParams(max_tokens=MAX_TOKENS))
+        for output in outputs:
+            print(f"Prompt: {output.prompt!r}\n")
+            print(f"Generated text: {output.outputs[0].text}")
         sleep(llm)
         run_checked("detach", "--client-pid", str(pid))
 

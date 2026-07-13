@@ -1,6 +1,10 @@
 ## Using Docker Compose
 
-For any environment, copy the `compose.example.yaml` file to `compose.yaml` and update `container_name`. Then run:
+For any environment, copy the `compose.example.yaml` file to `compose.yaml` and update `container_name`.
+
+Edit `volumes` in `compose.yaml` to include directories like model weight storage.
+
+Then run:
 
 ```shell
 cd environment/<env_name>
@@ -27,13 +31,15 @@ cd environment/<env_name>
 docker compose down
 ```
 
-It is recommended to mount a `docker_root` folder as the home directory so you don't need to install Rust in every container. To get the basic configuration like `.bashrc`, run:
+## Appendix
+
+### Installing requirements (legacy CUDA 11 environment, not needed for `vllm`)
+
+It is recommended to mount a `docker-root` folder as the home directory so you don't need to install Rust in every container. To get the basic configuration like `.bashrc`, run:
 
 ```shell
-cp -r /etc/skel/. /path/to/docker_root
+cp -r /etc/skel/. /path/to/docker-root
 ```
-
-## Installing requirements
 
 - Note that we need Rust **nightly** toolchain to build the project, which is not installed in the docker image.
 
@@ -48,7 +54,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-t
 
 - Version checklist
   - Rust: `nightly`
-  - CMake: at least `3.22.1` (required to run some of the tests)
+  - CMake: at least `3.22.1` (if you want to run some of the remoting tests)
   - Clang: at least `6.0.0-1ubuntu2`
 
 You need to install Clang manually:
@@ -64,19 +70,11 @@ You probably also need to upgrade NCCL:
 apt install libnccl2 libnccl-dev
 ```
 
-The `vllm` environment does not include cuDNN, so you need to install it manually:
-
-```shell
-apt install libcudnn9-dev-cuda-12
-```
-
 If you need RDMA support:
 
 ```shell
 apt install librdmacm-dev ibverbs-utils --no-install-recommends
 ```
-
-## Appendix
 
 ### Build the (legacy PyTorch 1.13 + CUDA 11) docker image
 
