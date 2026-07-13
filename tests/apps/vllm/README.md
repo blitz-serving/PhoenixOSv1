@@ -1,5 +1,7 @@
 # vLLM v0.19.1 Examples
 
+This README provides example to run checkpoint and restore (with and without a context service) on vLLM. 
+
 You need to run these examples in the provided `environment/vllm` Docker Compose environment.
 
 Follow the steps in [environment/README.md](../../../environment/README.md) to start a container and spawn a terminal in it.
@@ -95,11 +97,11 @@ To restore GPU context without a preloaded context service, comment out the stan
 
 It is possible to manually call the `detach`/`attach`/`standby` commands in a terminal, but you need to insert `time.sleep()` into the script so you can find the exact time spot to detach the process.
 
-## PhOSv0-style checkpoint and restore with CRIU
+## PhOS checkpoint and restore with CRIU (w/o context service)
 
-You can checkpoint one vLLM process with PhOSv0-style checkpoint and restore with CRIU.
+You can checkpoint one vLLM process with CRIU.
 
-You need to turn off `io_uring` as CRIU [does not support it](https://github.com/checkpoint-restore/criu/issues/2131):
+You need to first turn off `io_uring` as CRIU [does not support it](https://github.com/checkpoint-restore/criu/issues/2131):
 
 ```bash
 sysctl kernel.io_uring_disabled=2
