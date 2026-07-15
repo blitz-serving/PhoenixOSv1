@@ -7,7 +7,7 @@ environ.update({
 
 from vllm import LLM
 
-MODEL = "/path/to/model"
+MODEL = "/models/Qwen3-0.6B"
 
 
 def main():
