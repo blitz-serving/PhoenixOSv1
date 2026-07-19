@@ -1,8 +1,10 @@
+name: vllm-yourname
+
 services:
   vllm:
     container_name: vllm-yourname
     build: .
-    image: vllm-phos
+    image: vllm-phos:yourname
     pull_policy: build
     init: true # handle stop signals
     # runtime: nvidia

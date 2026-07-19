@@ -4,7 +4,7 @@ PhoenixOS (PhOS) checkpoints and restores a running GPU process — its live CUD
 
 PhOS v1 is a preview refactor of [SJTU-IPADS/phoenixos](https://github.com/SJTU-IPADS/phoenixos) that focuses on ease of use and adds checkpoint-and-restore support for vLLM. It offers two modes:
 
-- **GPU-only checkpoint/restore** (`detach`/`attach`): only the GPU worker is torn down while the host (CPU-side) process stays alive holding its state. A shared **context service** (`standby`) keeps kernels warm across processes so restores skip reloading and JIT-compiling them. For LLM serving this means many models can be parked using **zero GPU memory** and packed onto one GPU — where plain sleep would pin each model's CUDA context resident.
+- **GPU-only checkpoint/restore** (`detach`/`attach`): only the GPU worker is torn down while the host (CPU-side) process stays alive holding its state. A shared **context service** (`standby`) keeps kernels warm across processes so restores skip reloading them. For LLM serving this means many models can be parked using **zero GPU memory** and packed onto one GPU — where plain sleep would pin each model's CUDA context resident.
 - **Whole-process checkpoint/restore** (with CRIU): PhOS snapshots the GPU state while CRIU checkpoints the host process, so the entire process — CPU side included — can be killed and later restored from disk.
 
 See the [vLLM guide and examples](tests/apps/vllm/README.md) for a hands-on walkthrough of both.
